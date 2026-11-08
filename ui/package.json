@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "ui/ の .js を ES Modules として読ませるための印"
+}

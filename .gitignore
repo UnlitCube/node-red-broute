@@ -1,0 +1,8 @@
+# 依存・生成物
+node_modules/
+*.tgz
+*.log
+
+# 秘密。credentials* のような広い形は lib/runtime/credentials-store.js まで無視するので使わない
+.env
+.env.*

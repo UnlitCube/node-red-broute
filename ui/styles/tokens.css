@@ -1,0 +1,217 @@
+/* デザイントークン — ライト / ダークの 2 テーマ（IoT 監視の家風: 藍 + スレート・角丸 12px）。
+   テーマ: <html data-theme="light|dark">。属性が無ければ OS の設定（prefers-color-scheme）に合わせる。
+   規則:
+   1. 画面の色・寸法は必ずここのトークンを使う。app.css に生の色（#hex・rgb()・hsl()）を書かない（test/ui/tokens.test.mjs が落とす）。
+   2. 状態色は「文字用（--ok など）」と「塗り用（--ok-solid）」を分ける。塗りの上の文字は --on-solid だけ。
+   3. 目を引く色は 1 色 1 意味: 緑=計測中 / 黄=接続中・注意 / 橙=値が古い / 赤=異常 / 青=外部の指示で停止中・お知らせ / 灰=停止・無効。
+      藍（--accent）は操作とフォーカスだけ。売電は青緑（--export）で、状態色と混ぜない。
+      空色（--role-light）= 契約の電力 / 赤紫（--role-motive）= 契約の動力。状態ではないので、枠つきのタグの形でだけ使う。
+   4. 名前は凍結する（改名・削除しない）。値は直してよい。
+   コントラスト（test/ui/tokens.test.mjs で全テーマ × 全面を計算する。ここに比を書き写さない）:
+   本文・状態の文字 4.5:1 以上、入力欄の枠・フォーカスリング・グラフの線 3:1 以上。
+   --text-faint は装飾（区切り記号・プレースホルダ）だけに使う。 */
+
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f5f9;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-inset: #eef0f5;
+  --header-bg: #ffffff;
+  --border: #e1e4ec;
+  --border-strong: #c4c9d6;
+  --border-input: #7d869a;
+  --text: #12172a;
+  --text-dim: #4c5468;
+  --text-faint: #767e92;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-text: #4338ca;
+  --on-solid: #ffffff;
+  --focus: #4f46e5;
+  --ok: #166534;
+  --ok-solid: #15803d;
+  --warn: #8a4a00;
+  --warn-solid: #b45309;
+  --stale: #9a3412;
+  --stale-solid: #c2410c;
+  --danger: #b42318;
+  --danger-solid: #c62828;
+  --danger-solid-hover: #a91f1f;
+  --info: #1d4ed8;
+  --info-solid: #2563eb;
+  --neutral: #4b5563;
+  --neutral-solid: #6b7280;
+  --role-light: #0369a1;
+  --role-motive: #a21caf;
+  --export: #0c6b64;
+  --export-solid: #0d9488;
+  --chart-power: #4f46e5;
+  --chart-r: #0e7490;
+  --chart-t: #be185d;
+  --chart-lqi: #7c3aed;
+  --chart-grid: #e6e8ef;
+  --soft-pct: 12%;
+  --hover-veil: rgba(18, 23, 42, 0.05);
+  --scrim: rgba(10, 14, 25, 0.45);
+  --shadow-card: 0 1px 2px rgba(18, 23, 42, 0.06), 0 8px 24px -16px rgba(18, 23, 42, 0.18);
+  --shadow-pop: 0 12px 32px -8px rgba(18, 23, 42, 0.28);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #0a0e19;
+    --surface: #121829;
+    --surface-raised: #182036;
+    --surface-inset: #0d1322;
+    --header-bg: #0e1424;
+    --border: #232c43;
+    --border-strong: #33405f;
+    --border-input: #6a7795;
+    --text: #e7eaf3;
+    --text-dim: #a6aec4;
+    --text-faint: #6c7590;
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
+    --accent-text: #a5b4fc;
+    --on-solid: #ffffff;
+    --focus: #818cf8;
+    --ok: #4ade80;
+    --ok-solid: #15803d;
+    --warn: #fbbf24;
+    --warn-solid: #b45309;
+    --stale: #fb923c;
+    --stale-solid: #c2410c;
+    --danger: #f87171;
+    --danger-solid: #c62828;
+    --danger-solid-hover: #b71c1c;
+    --info: #60a5fa;
+    --info-solid: #2563eb;
+    --neutral: #9ca3af;
+    --neutral-solid: #4b5563;
+    --role-light: #7dd3fc;
+    --role-motive: #f0abfc;
+    --export: #2dd4bf;
+    --export-solid: #14b8a6;
+    --chart-power: #818cf8;
+    --chart-r: #22d3ee;
+    --chart-t: #f472b6;
+    --chart-lqi: #c4b5fd;
+    --chart-grid: #1e2639;
+    --soft-pct: 18%;
+    --hover-veil: rgba(255, 255, 255, 0.06);
+    --scrim: rgba(0, 0, 0, 0.6);
+    --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* 手で選んだダーク。値は上の @media の中と同じ（テストが一致を確かめる）。 */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0a0e19;
+  --surface: #121829;
+  --surface-raised: #182036;
+  --surface-inset: #0d1322;
+  --header-bg: #0e1424;
+  --border: #232c43;
+  --border-strong: #33405f;
+  --border-input: #6a7795;
+  --text: #e7eaf3;
+  --text-dim: #a6aec4;
+  --text-faint: #6c7590;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-text: #a5b4fc;
+  --on-solid: #ffffff;
+  --focus: #818cf8;
+  --ok: #4ade80;
+  --ok-solid: #15803d;
+  --warn: #fbbf24;
+  --warn-solid: #b45309;
+  --stale: #fb923c;
+  --stale-solid: #c2410c;
+  --danger: #f87171;
+  --danger-solid: #c62828;
+  --danger-solid-hover: #b71c1c;
+  --info: #60a5fa;
+  --info-solid: #2563eb;
+  --neutral: #9ca3af;
+  --neutral-solid: #4b5563;
+  --role-light: #7dd3fc;
+  --role-motive: #f0abfc;
+  --export: #2dd4bf;
+  --export-solid: #14b8a6;
+  --chart-power: #818cf8;
+  --chart-r: #22d3ee;
+  --chart-t: #f472b6;
+  --chart-lqi: #c4b5fd;
+  --chart-grid: #1e2639;
+  --soft-pct: 18%;
+  --hover-veil: rgba(255, 255, 255, 0.06);
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+/* 薄い面は塗り色から作る。テーマのブロックの後ろに 1 回だけ書く（テーマの切り替えに追従する）。 */
+:root {
+  --accent-soft: color-mix(in srgb, var(--accent) var(--soft-pct), transparent);
+  --ok-soft: color-mix(in srgb, var(--ok-solid) var(--soft-pct), transparent);
+  --warn-soft: color-mix(in srgb, var(--warn-solid) var(--soft-pct), transparent);
+  --stale-soft: color-mix(in srgb, var(--stale-solid) var(--soft-pct), transparent);
+  --danger-soft: color-mix(in srgb, var(--danger-solid) var(--soft-pct), transparent);
+  --info-soft: color-mix(in srgb, var(--info-solid) var(--soft-pct), transparent);
+  --neutral-soft: color-mix(in srgb, var(--neutral-solid) var(--soft-pct), transparent);
+  --role-light-soft: color-mix(in srgb, var(--role-light) var(--soft-pct), transparent);
+  --role-motive-soft: color-mix(in srgb, var(--role-motive) var(--soft-pct), transparent);
+  --export-soft: color-mix(in srgb, var(--export-solid) var(--soft-pct), transparent);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--focus) 40%, transparent);
+}
+
+/* テーマで変わらない値 */
+:root {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP',
+    'Yu Gothic UI', Meiryo, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, Menlo, 'Noto Sans Mono', monospace;
+  /* 数字は欧文の書体を先に当てる。和文の書体の U+2212（負号）は全角幅で「ー」に見える（Windows の Chrome） */
+  --font-num: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Roboto, 'Noto Sans', 'Hiragino Sans', 'Yu Gothic UI',
+    Meiryo, sans-serif;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 16px;
+  --fs-lg: 20px;
+  --fs-xl: 28px;
+  --fs-2xl: 36px;
+  --lh: 1.6;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+  --control-h: 36px;
+  --page-max: 1200px;
+  --page-pad: 16px;
+  --header-h: 56px;
+  --z-header: 20;
+  --z-menu: 30;
+  --z-dialog: 40;
+  --z-toast: 50;
+  --dur-fast: 120ms;
+  --dur-med: 180ms;
+}
+
+@media (min-width: 768px) {
+  :root {
+    --page-pad: 24px;
+  }
+}

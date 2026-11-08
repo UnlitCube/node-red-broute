@@ -1,0 +1,2 @@
+# 同梱した Web UI の部品（Preact・htm）は、VERSIONS.json の sha256 と 1 バイトも違えない（core.autocrlf で CRLF にしない）
+ui/vendor/** -text

@@ -1,0 +1,585 @@
+<script type="text/javascript">
+  ;(function () {
+    // =========================================================================
+    //  B ルートノード（wsuha-broute）の編集画面。Wi-SUN アダプタ（wsuha-device.html）と同じ作り:
+    //   - アダプタと名前はタブの上。その下に RED.tabs の「基本設定」「詳細設定」（mqtt-broker と同じ作り）。
+    //   - 長い説明はヘルプへ。欄の下の説明は 1 行まで。
+    //   - epcFilter は実行時に読まれないので欄を出さない。defaults には残す（欄が無ければ、既存のフローの値はそのまま保たれる）。
+    // =========================================================================
+
+    function blank(v) {
+      return v === undefined || v === null || String(v).trim() === ''
+    }
+
+    /** 異常の通知: 0〜100 の整数か空（空と 0 は通知しない）。 */
+    function wsuhaAlertCount(v) {
+      if (blank(v)) return true
+      const t = String(v).trim()
+      return /^\d+$/.test(t) && +t <= 100
+    }
+
+    /** つながるまで待つ長さ [秒]: 0〜3600 の数か空（空は既定の 120 秒）。 */
+    function wsuhaWaitSec(v) {
+      if (blank(v)) return true
+      if (!/^\s*\d+(\.\d+)?\s*$/.test(String(v))) return false
+      const n = Number(v)
+      return n >= 0 && n <= 3600
+    }
+
+    /** 詳細設定の欄と、その検証（タブの名前の「n 件の注意」に数える）。 */
+    const ADVANCED = { alertAfterFailures: wsuhaAlertCount, waitSec: wsuhaWaitSec }
+
+    RED.nodes.registerType('wsuha-broute', {
+      category: 'network',
+      color: '#4DB6AC',
+      defaults: {
+        name: { value: '' },
+        device: { value: '', type: 'wsuha-device', required: true },
+        epcFilter: { value: '' },
+        emitMeasurements: { value: true },
+        emitStatus: { value: true },
+        emitLogs: { value: false },
+        emitRaw: { value: false },
+        alertAfterFailures: { value: 3, validate: wsuhaAlertCount },
+        waitSec: { value: 120, validate: wsuhaWaitSec },
+      },
+      inputs: 1,
+      outputs: 2,
+      outputLabels: ['計測値', '状態の変化とイベント'],
+      inputLabels: '取得要求 / 操作 / 設定 / 読み出し',
+      icon: 'bridge.svg',
+      label: function () {
+        if (this.name) return this.name
+        const d = RED.nodes.node(this.device)
+        if (!d) return 'B ルート'
+        // 表示の決め方は設定ノードの label が持っている（名前 → 契約 → ポートなど）
+        const own = d._def && typeof d._def.label === 'function' ? d._def.label.call(d) : d.name
+        return 'B ルート: ' + (own || '')
+      },
+      paletteLabel: 'B ルート',
+      labelStyle: function () {
+        return this.name ? 'node_label_italic' : ''
+      },
+      oneditprepare: function () {
+        const node = this
+
+        // --- タブ（基本設定 / 詳細設定）。開くときは毎回「基本設定」から -----------------------
+        const tabs = RED.tabs.create({
+          id: 'wsuha-broute-tabs',
+          onchange: function (tab) {
+            $('#wsuha-broute-tabs-content').children().hide()
+            $('#' + tab.id).show()
+          },
+        })
+        tabs.addTab({ id: 'wsuha-broute-tab-basic', label: '基本設定' })
+        tabs.addTab({ id: 'wsuha-broute-tab-advanced', label: '詳細設定' })
+        setTimeout(function () {
+          tabs.resize()
+        }, 0)
+
+        // --- 項目の無い前の版のフロー ---------------------------------------------------------
+        // エディタは無い項目を空や「外れ」で見せる。そのまま保存すると、実行時の既定（出力は出す・3 回で通知）が
+        // 「出さない」「通知しない」に変わってしまうので、実行時の既定を見せる
+        if (node.emitMeasurements === undefined) $('#node-input-emitMeasurements').prop('checked', true)
+        if (node.emitStatus === undefined) $('#node-input-emitStatus').prop('checked', true)
+        if (node.alertAfterFailures === undefined) $('#node-input-alertAfterFailures').val('3')
+
+        // --- 詳細設定の入力の誤りの数を、タブの名前に出す（開かなくても気づけるように）-----------
+        function markAdvanced() {
+          if (typeof tabs.renameTab !== 'function') return
+          const n = Object.keys(ADVANCED).filter(function (k) {
+            return !ADVANCED[k]($('#node-input-' + k).val())
+          }).length
+          tabs.renameTab('wsuha-broute-tab-advanced', n ? '詳細設定（' + n + ' 件の注意）' : '詳細設定')
+        }
+        $('#wsuha-broute-tab-advanced input').on('change input', markAdvanced)
+        markAdvanced()
+      },
+    })
+  })()
+</script>
+
+<script type="text/html" data-template-name="wsuha-broute">
+  <style>
+    .wsuha-node .form-row > label { width: 120px; }
+    .wsuha-node .form-row > input[type='text'] { width: calc(100% - 130px); }
+    .wsuha-node .form-row > input.wsuha-short { width: 90px; }
+    .wsuha-node .form-tips { margin-top: 4px; }
+    .wsuha-node .wsuha-indent { margin-left: 124px; }
+  </style>
+  <div class="wsuha-node">
+    <div class="form-row">
+      <label for="node-input-device"><i class="fa fa-microchip"></i> アダプタ</label>
+      <input type="text" id="node-input-device" style="width:calc(100% - 130px)" />
+    </div>
+
+    <div class="form-row">
+      <label for="node-input-name"><i class="fa fa-tag"></i> 名前</label>
+      <input type="text" id="node-input-name" placeholder="省略可" />
+    </div>
+
+    <div class="form-row">
+      <ul id="wsuha-broute-tabs"></ul>
+    </div>
+
+    <div id="wsuha-broute-tabs-content" style="min-height:150px">
+      <div id="wsuha-broute-tab-basic">
+        <div class="form-row">
+          <label for="node-input-emitMeasurements"><i class="fa fa-line-chart"></i> 出力 1</label>
+          <input type="checkbox" id="node-input-emitMeasurements" style="width:auto;vertical-align:top" />
+          計測値
+        </div>
+
+        <div class="form-row">
+          <label for="node-input-emitStatus"><i class="fa fa-exchange"></i> 出力 2</label>
+          <input type="checkbox" id="node-input-emitStatus" style="width:auto;vertical-align:top" />
+          状態の変化とイベント
+          <div class="form-tips wsuha-indent">入力への返事（read・settings など）は、外しても出力 2 に出ます</div>
+        </div>
+      </div>
+
+      <div id="wsuha-broute-tab-advanced" style="display:none">
+        <div class="form-row">
+          <label for="node-input-alertAfterFailures"><i class="fa fa-bell"></i> 異常の通知</label>
+          <input type="text" id="node-input-alertAfterFailures" class="wsuha-short" /> 回続けて失敗したら
+          <div class="form-tips wsuha-indent">ノードのエラーを 1 度だけ出します（0 か空なら通知しません）</div>
+        </div>
+
+        <div class="form-row">
+          <label for="node-input-waitSec" style="vertical-align:top"><i class="fa fa-hourglass-half"></i> つながるまで<br />待つ長さ</label>
+          <input type="text" id="node-input-waitSec" class="wsuha-short" placeholder="120" /> 秒
+          <div class="form-tips wsuha-indent">指示を預かる長さです（空なら 120 秒、0 なら待ちません）</div>
+        </div>
+
+        <div class="form-row">
+          <label for="node-input-emitLogs"><i class="fa fa-list-alt"></i> 動作ログ</label>
+          <input type="checkbox" id="node-input-emitLogs" style="width:auto;vertical-align:top" />
+          出力 2 に出す
+        </div>
+
+        <div class="form-row">
+          <label for="node-input-emitRaw"><i class="fa fa-file-text-o"></i> 受信した生の行</label>
+          <input type="checkbox" id="node-input-emitRaw" style="width:auto;vertical-align:top" />
+          出力 2 に出す
+          <div class="form-tips wsuha-indent">量が多いので、原因を調べるときだけ入れてください</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</script>
+
+<script type="text/html" data-help-name="wsuha-broute">
+  <p>Wi-SUN B ルートで低圧スマートメーターから計測値を取得します。</p>
+
+  <h3>はじめに</h3>
+  <ol>
+    <li>「アダプタ」の右のボタン（Node-RED 3 は鉛筆、4 は ＋）を押して Wi-SUN アダプタを追加し、契約・ポート・B ルートの認証 ID とパスワードを入れます
+      （Node-RED 3 で別のアダプタが選んであるときは、先に「新規に Wi-SUN アダプタ を追加...」を選びます）。</li>
+    <li>デプロイすると、このノードが自分でメーターにつなぎ、切れたらつなぎ直します（入力は配線しなくても動きます）。</li>
+    <li>取得間隔（既定 30 秒）ごとに、瞬時電力が出力 1 に出ます。</li>
+  </ol>
+  <p>実機が無いときは、アダプタの接続先を「シミュレーター（実機なしで試す）」にすると、認証情報を入れなくても動きを試せます。
+     パレットの検索では「B ルート」か「broute」で見つかります（空白の無い「Bルート」では見つかりません）。</p>
+  <p>接続の手順（初期化 → メーターを探す → 認証 → 確認）、失敗したときの再試行、
+     接続が切れたときの段階的な再接続は、このノードが自動で行います。</p>
+
+  <h3>編集画面の項目</h3>
+  <p>アダプタと名前はタブの上にあります。出力 1 と出力 2 は「基本設定」に、ふつうは変えなくてよいものは「詳細設定」にあります。
+     詳細設定に入力の誤りがあると、タブの名前が「詳細設定（n 件の注意）」になります。</p>
+  <dl class="message-properties">
+    <dt>出力 1（基本設定）</dt>
+    <dd>印を外すと、計測値を出しません。</dd>
+    <dt>出力 2（基本設定）</dt>
+    <dd>印を外すと、状態の変化（<code>status</code>・<code>phase</code>）とイベント（<code>event</code>）を出しません。
+        入力への返事（<code>read</code>・<code>settings</code> など）と、<code>alert</code>・<code>recovered</code>・<code>settings</code>・<code>config</code> は、外しても出力 2 に出ます。</dd>
+    <dt>異常の通知（詳細設定）</dt>
+    <dd>つながらない状態がこの回数（0〜100 の整数）続いたときに、<b>1 度だけ</b>ノードのエラーを出します。Catch ノードで拾って通知へ回せます。
+        出力 2 にも <code>alert</code> が流れ、復旧したら <code>recovered</code> が流れます。0 か空なら通知しません。
+        このノードは失敗しても自動運転を続けるので、通知が無いと、つながらないままになっていることに気づけません。</dd>
+    <dt>つながるまで待つ長さ（詳細設定）</dt>
+    <dd>つながっていない（接続中・再接続中・ポートを開いている途中）ときに来た <code>get</code>・<code>poll</code>・<code>command</code>・
+        <code>diag</code>・取り直しの要る <code>read</code> を、エラーにせず<b>預かって</b>、つながったら来た順に実行します（下の「預かり」）。
+        つながっていない間がこの秒数を過ぎたら、出力 2 に <code>error</code>（<code>NOT_CONNECTED</code>）を出します。
+        空なら 120 秒、0 なら待ちません（0〜3600 秒）。1 通ごとに変えるなら <code>msg.timeoutSec</code> を使います。</dd>
+    <dt>動作ログ（詳細設定）</dt>
+    <dd>印を付けると、出力 2 に <code>log</code> を出します。</dd>
+    <dt>受信した生の行（詳細設定）</dt>
+    <dd>印を付けると、出力 2 に <code>raw</code> を出します。量が多いので、原因を調べるときだけ入れてください。</dd>
+  </dl>
+
+  <h3>入力</h3>
+  <p><b>入力を配線しなくても動きます。</b>デプロイすると、ノードが自分でポートを開き、
+     メーターを探して認証し、設定した間隔で計測を続け、切れたらつなぎ直します。
+     接続に失敗しても自動運転は止まりません
+     （再試行の間隔を伸ばしながら続けます）。</p>
+  <p>ポートを開いているのは設定ノード（Wi-SUN アダプタ）です。デプロイの種類が「変更したノード」か「変更したフロー」なら、このノードだけを変更して再デプロイしても、
+     メーターとの接続は切れません。デプロイの種類が「全て」（既定）のときは設定ノードも作り直すので、つなぎ直すまで 1 分前後止まります。
+     設定ノード（か Web UI の設定タブ・入力 <code>config</code>）で「有効」を外すと、ポートを開かず「無効」と表示します。
+     無効のあいだに、アダプタを使う入力（<code>get</code>・<code>poll</code>・<code>command</code>・<code>diag</code>・取り直しの要る <code>read</code> と、下の上書き）を送ると、
+     出力 2 に <code>error</code>（<code>DISABLED</code>）を出し、ノードのエラーにもします
+     （Web UI と同じ設定と読み出しの入力、取り直しの要らない <code>read</code> は、無効でも使えます）。
+     つながっていないときの <code>get</code>・<code>poll</code>・<code>command</code>・<code>diag</code>・<code>read</code> は、下の「預かり」のとおり、つながるまで待ちます。
+     それ以外の入力（<code>status</code>・<code>stop</code>・<code>interval</code> など）は、接続の設定を変えて接続し直している途中なら <code>BUSY</code>、
+     アダプタを初期化できなかったときは <code>PORT_DOWN</code> です。</p>
+
+  <h4>最新値の読み出し（<code>read</code>）</h4>
+  <p>このノードは、取った値の最新のものを全部持っています（取得間隔・積算の取得間隔・定時積算の取得間隔ごとに取る値と、接続時に 1 度だけ取る値）。
+     <code>read</code> を送ると、<b>電波を使わずに</b>、持っている値ですぐ出力 2 の <code>read</code> に答えます（入力の msg を引き継ぎます）。
+     デプロイで設定ノードを作り直しても、作り直す前に取れていた値で答えます（取れた時刻 <code>at</code> と <code>ageSec</code> で古さが分かります）。
+     認証 ID か接続先を変えたときは、前の値を出しません。</p>
+  <table style="width:100%;font-size:12px">
+    <tr><th style="text-align:left">payload</th><th style="text-align:left">答える値</th></tr>
+    <tr><td>なし / <code>{}</code>（inject の時刻も）</td><td>持っている値の全部。<code>missing</code> は定期的に取る値（取得間隔・積算の取得間隔・定時積算の取得間隔ごとに取るもの）のうち、まだ一度も取れていないもの</td></tr>
+    <tr><td><code>'E7'</code> / <code>['E7','E8']</code> / <code>{ epcs: ['E7'] }</code></td><td>その EPC だけ。まだ取れていないものは <code>missing</code></td></tr>
+    <tr><td><code>{ keys: ['instantPower', 'cumulativeForward'] }</code></td><td>出力 1 の <code>values</code> と同じ名前で指定します</td></tr>
+    <tr><td><code>{ …, maxAgeSec: 60 }</code>（か <code>msg.maxAgeSec</code>）</td>
+        <td>指定した値のどれかが 60 秒より古い・無いときだけ、メーターへ取りに行ってから答えます（取りに行くときは下の「預かり」の規則に従います。取った値は出力 1 にも出ます）。
+            payload なしで付けたときに取りに行くのは定期的に取る値だけです（接続時に 1 度だけ取る係数や製造番号は取り直しません）。
+            メーターが持っていない値（プロパティマップ <code>0x9F</code> に無いもの）は取りに行かず、<code>missing</code> に入れます</td></tr>
+  </table>
+  <p>返事: <code>{ device, deviceKey, ts, at, maxAgeSec, values: { instantPower: { epc, name, value, unit, display, at, ts, fresh, ageSec }, … }, missing: ['EA', …], refreshed: ['E7', …] }</code>。
+     値の中身は出力 1 の <code>all</code> と同じです（<code>instantCurrent</code> なら <code>r</code>・<code>t</code>・<code>total</code> も）。
+     <code>at</code> は取れた時刻（ミリ秒の数）、<code>ts</code> は同じ時刻の ISO の文字列、<code>ageSec</code> は何秒前か。
+     <code>fresh</code> は、<code>maxAgeSec</code> を付けたならそれより新しいか、付けていなければ Web UI の鮮度と同じ（取得間隔の 3 倍 + 30 秒など）。
+     <code>refreshed</code> は今回メーターへ取りに行った EPC です（電波を使わなければ空）。
+     Web UI の API の <code>GET …/api/v1/adapters/&lt;id&gt;/read?epcs=E7,E8&amp;maxAgeSec=60</code> も同じ形です（Web UI の API は預からず、つながっていなければすぐ 503）。
+     この API で <code>maxAgeSec</code> を付けて電波を使うときは、<code>X-Wsuha-Radio: 1</code> のヘッダーが要ります。取りに行けるのは 1 台につき 3 秒に 1 回、1 回に 6 個までです。
+     Node-RED に認証（<code>adminAuth</code>）があるサーバーでは、エディタのログインも要ります。このノードの入力には、どれも掛かりません。</p>
+
+  <h4>預かり（つながっていないときの指示）</h4>
+  <p>電波かアダプタが要る入力（<code>get</code>・<code>poll</code>・<code>command</code>・<code>diag</code>・取り直しの要る <code>read</code>）が、
+     つながっていない（接続中・再接続中・ポートを開いている途中・接続の設定の変更で開き直している途中）ときに来たら、エラーにせずに<b>預かり</b>、
+     つながったら来た順に 1 つずつ実行します。再接続の手順をフローで組む必要はありません。
+     つながっているときに来たものも同じ待ち行列に並び、前の指示（メーターの応答待ち）が済んでから実行します。
+     つながった直後は、接続時に 1 度だけ取る値（係数・単位など）を取り終えてから実行します（積算を換算した値で出すため）。</p>
+  <ul>
+    <li>待つ長さは、このノードの「つながるまで待つ長さ」（既定 120 秒）か <code>msg.timeoutSec</code>。<b>つながっていない間だけ</b>数えます
+        （つながっていて、前の指示や接続時の取得の後ろで順番を待つ間は数えません）。過ぎたら出力 2 に
+        <code>error</code>（<code>code: 'NOT_CONNECTED'</code>・届いてからの長さ <code>waitedMs</code> [ミリ秒]）を出し、ノードのエラーにします（Catch ノードで拾えます）。
+        再接続を指示した直後（<code>reconnect</code>・Web UI の「再接続」）に来たものも、つなぎ直すまで預かります。</li>
+    <li>アダプタだけで答えるコマンド（<code>SKINFO</code>・<code>SKVER</code>・<code>SKAPPVER</code>・<code>SKTABLE</code>・<code>ROPT</code>・<code>SKSREG</code>。
+        <code>diag</code> の <code>info</code>・<code>table</code>・<code>ropt</code>・<code>sreg</code>）は、ポートが開いていれば接続を待たず、
+        メーターへの指示の応答待ちの間も先に実行します。</li>
+    <li>実行の途中でセッションが切れた（応答のタイムアウトや送信の失敗が続いて再接続に入った）ときは、つなぎ直したあとに <b>1 回だけ</b>やり直します。
+        2 回目も失敗したら <code>error</code> です。</li>
+    <li><code>stop</code>・<code>terminate</code> で止めているとき（Web UI の「停止」も）・設定ノードが無効のときは、待たずにすぐ <code>error</code>
+        （<code>STOPPED_BY_OVERRIDE</code>・<code>DISABLED</code>）。待っている間に止めたときも、待っているものをすぐ返します。
+        送信制限（ARIB の <code>EVENT 32</code>）の間は、解けるまで預かります（待つ長さの中で）。
+        実行を始めたあとに送信制限で断られたときも、やり直しの 1 回に数えずに預かり直します。</li>
+    <li>預かれるのは 1 台につき 20 件まで。超えたら <code>error</code>（<code>BUSY</code>）。つながっていない間に同じ取得（同じ EPC の <code>get</code>・<code>poll</code>）が重なったら、
+        つながったあと 1 回の取得でまとめて答えます（電波の節約。つながっているときはまとめません）。</li>
+    <li>デプロイ（設定ノードとこのノードの作り直し）をまたいで続きます。返事は、作り直した同じ id のノードから出ます。
+        このノードを削除したときは、預かっていたものを <code>error</code>（<code>SHUTDOWN</code>）で返します（Catch ノードで拾えます）。
+        Node-RED を止めたときも取りやめますが、Node-RED（3.1）はフローを止め終えてから知らせるので、下流のノードと Catch はもう閉じていて
+        <code>error</code> は届きません。取りやめた件数は Node-RED のログに warn で 1 行残します。</li>
+    <li>預かっている数といちばん古いものの待ち時間は、出力 2 の <code>status</code>・<code>detail</code> と Web UI の状態タブの <code>pendingCommands</code>
+        （<code>{ count, oldestMs }</code>）に出ます。</li>
+    <li>周期の取得（自動運転）は預かりとは関係なく動きます。Web UI のボタン（今すぐ取得・診断）は待たせず、すぐ答えます。</li>
+  </ul>
+  <p>入力は 2 種類です。<b>その場の指示と上書き</b>（下の 3 つの表）と、
+     <b>Web UI と同じ操作と読み出し</b>（運用設定・接続の設定・認証情報・診断・状態・推移・ログ・一覧・版）です。</p>
+  <dl class="message-properties">
+    <dt>topic <span class="property-type">string</span></dt>
+    <dd>何をするかの指示。<code>payload.action</code> でも指定できます。</dd>
+    <dt>payload <span class="property-type">string | number | array | object</span></dt>
+    <dd>指示ごとの引数。</dd>
+  </dl>
+
+  <h4>その場の指示（状態には残りません）</h4>
+  <table style="width:100%;font-size:12px">
+    <tr><th style="text-align:left">topic</th><th style="text-align:left">payload</th><th style="text-align:left">動作</th></tr>
+    <tr><td><code>get</code></td><td><code>'E7'</code> / <code>['E7','E8']</code> / <code>0xE7</code></td><td>指定した値を今すぐ取得します（つながっていなければ預かります）</td></tr>
+    <tr><td><code>poll</code></td><td>—</td><td>定期的に取りに行く値を今すぐ 1 回取得します（つながっていなければ預かります）</td></tr>
+    <tr><td><code>command</code></td><td><code>'SKINFO'</code></td><td>任意の SK コマンドを送ります（つながっていなければ預かります。アダプタだけで答えるものは、ポートが開けば待ちません）。payload が文字列でないときは送らず、<code>error</code>（<code>VALIDATION</code>）を出します</td></tr>
+    <tr><td><code>read</code></td><td>なし / <code>'E7'</code> / <code>['E7','E8']</code> / <code>{ epcs, keys, maxAgeSec }</code></td>
+        <td>持っている最新の値を、電波を使わずにすぐ出力 2 の <code>read</code> へ出します（上の「最新値の読み出し」）</td></tr>
+    <tr><td><code>reconnect</code></td><td><code>{ ladder: 0..3 }</code></td><td>段を指定してつなぎ直します</td></tr>
+    <tr><td><code>status</code></td><td>—</td><td>現在の状態を出力 2 へ出します</td></tr>
+    <tr><td><code>clear-radio-block</code></td><td>—</td><td><code>EVENT 33</code> を取りこぼしたときに、手動で解除します</td></tr>
+  </table>
+
+  <h4>続く上書き（解除するまで残ります）</h4>
+  <table style="width:100%;font-size:12px">
+    <tr><th style="text-align:left">topic</th><th style="text-align:left">payload</th><th style="text-align:left">動作</th></tr>
+    <tr><td><code>stop</code></td><td><code>{ reason: '点検中' }</code></td><td>自動運転を止めます</td></tr>
+    <tr><td><code>terminate</code></td><td>—</td><td>メーターとのセッションを終了して止めます</td></tr>
+    <tr><td><code>interval</code></td><td><code>60</code></td><td>取得間隔 [秒]。15〜3600 の整数です</td></tr>
+    <tr><td><code>epcs</code></td><td><code>['E7','E0']</code> / <code>'E7, E0'</code></td>
+        <td>定期的に取りに行く値。1〜6 個で、履歴の <code>E2</code>・<code>E4</code>・<code>EC</code> は指定できません
+            （1 件が大きく、ほかの値と一緒に取れないため。履歴は <code>get</code> で 1 つずつ取ります）</td></tr>
+  </table>
+  <p><code>interval</code>・<code>epcs</code> の検証は、Web UI の設定とフローの <code>settings</code> と同じです。
+     外れたら上書きを掛けず、出力 2 の <code>error</code> に <code>code: 'VALIDATION'</code> と <code>details</code> を付けます。</p>
+  <p>続く上書きは<b>デプロイをまたいで残ります</b>（全体のデプロイ・設定ノードの値の変更・「有効」の入れ直しを含む）。
+     点検のために止めた台が、関係の無い変更のデプロイで動き出さないためです。
+     外れるのは、下の解除の入力（Web UI の「開始」「自動運転に戻す」も同じ）・Node-RED の再起動・設定ノードの削除のときです。
+     デプロイのあとに引き継いだときは、Node-RED のログとアダプタのログに 1 行残します。</p>
+  <p>掛かっている上書きは状態の <code>overrides</code> に出ます。
+     <code>stop</code> / <code>terminate</code> で止まっているときは、接続の段階（<code>phase</code>）が
+     <code>idle</code> ではなく <b><code>overridden</code>（外部の指示で停止中）</b> になり、
+     ノードの表示も青になります。故障で止まったのか、誰かが止めたのかを取り違えないためです。</p>
+
+  <h4>上書きの解除</h4>
+  <table style="width:100%;font-size:12px">
+    <tr><th style="text-align:left">topic</th><th style="text-align:left">動作</th></tr>
+    <tr><td><code>start</code> / <code>resume</code></td><td>止めていた上書きだけ外します（取得間隔と定期的に取りに行く値の上書きは残します）</td></tr>
+    <tr><td><code>auto</code> / <code>reset</code></td><td>上書きを全部外して設定どおりに戻します</td></tr>
+  </table>
+  <p><code>interval</code> / <code>epcs</code> に空（<code>null</code>）を渡すと、その項目だけ戻ります。</p>
+
+  <h4>Web UI と同じ操作</h4>
+  <p>Web UI でできることは、全部このノードの入力からもできます（Web UI だけの機能はありません）。
+     Web UI と同じ検証・同じ <code>settings.json</code> を通るので、どこから変えても Web UI とエディタに映ります。
+     返事は<b>入力の msg を引き継いで</b>（<code>topic</code> と <code>payload</code> を入れ替えて）出力 2 へ出します。
+     <code>http in</code> からつないで <code>http response</code> で返す、といった配線ができます。</p>
+  <p><b>注意</b>: <code>http in</code> から入る経路には、Web UI の API の保護（<code>Content-Type: application/json</code> の確認・
+     <code>Origin</code> の確認（<code>BAD_ORIGIN</code>）・<code>Host</code> の確認（<code>BAD_HOST</code>）・Node-RED の認証（<code>adminAuth</code>）・<code>readOnly</code>）が掛かりません。
+     同じネットワークの誰でも呼べ、別のサイトのページのふつうのフォームの送信（POST）や画像の読み込み（GET）からも届きます。
+     <code>http in</code> につなぐのは読み出し（<code>get-settings</code>・<code>get-config</code>・<code>serialports</code>・<code>detail</code>・<code>trend</code>・<code>logs</code>・
+     <code>adapters</code>・<code>meta</code>）だけにしてください。
+     書き込み（<code>settings</code>・<code>settings-reset</code>・<code>config</code>・<code>credentials</code>・<code>diag</code>・<code>stop</code>・<code>terminate</code> など）までつなぐなら、
+     settings.js の <code>httpNodeAuth</code>（Basic 認証）を掛け、function ノードで <code>msg.req.headers.origin</code> を確かめてから渡してください。</p>
+  <p>settings.js の <code>wsuhaBroute.readOnly</code> と Node-RED の認証（<code>adminAuth</code>）は Web UI からの操作だけを止め、このノードの入力には掛かりません
+     （フローは、エディタでデプロイした人が作ったものとして扱います）。
+     この節の操作と下の読み出しは、設定ノードが無効でも <code>diag</code> 以外は使えます（<code>diag</code> は <code>DISABLED</code>）。
+     失敗したときは出力 2 に <code>error</code> を出し、ノードのエラーにもします（Catch ノードで拾えます）。</p>
+  <table style="width:100%;font-size:12px">
+    <tr><th style="text-align:left">topic</th><th style="text-align:left">payload</th><th style="text-align:left">動作（Web UI の何と同じか）</th><th style="text-align:left">出力 2 の topic</th></tr>
+    <tr><td><code>settings</code></td>
+        <td><code>{ pollIntervalSec?, pollEpcs?, slowIntervalSec?, halfHourIntervalSec? }</code></td>
+        <td>運用設定を保存して効かせます（設定タブの「保存」）。再接続はしません。値を <code>null</code> にするとその項目の運用設定を外します。
+            <code>msg.rev</code> があれば、今の版と照合します（違えば <code>REVISION_MISMATCH</code>）。
+            変えた人は <code>flow:&lt;このノードの名前か id&gt;</code> と記録されます</td>
+        <td><code>settings</code></td></tr>
+    <tr><td><code>settings-reset</code></td><td>—</td><td>運用設定を全部外して設定ノードの値に戻します（「設定ノードの値に戻す」）。<code>msg.rev</code> も使えます</td><td><code>settings</code></td></tr>
+    <tr><td><code>get-settings</code></td><td>—</td><td>今の設定を読みます（設定タブ）</td><td><code>settings</code></td></tr>
+    <tr><td><code>diag</code></td><td><code>{ name, args? }</code></td>
+        <td>診断します（診断タブ）。<code>name</code> は <code>info</code> / <code>table</code>（<code>args.which</code> = 1・2・E・F）/
+            <code>ropt</code> / <code>sreg</code>（<code>args.reg</code> = S02・S03・S07・S0A・S15・S16・S17・SA2・SFD・SFE・SF0。読むだけ）/
+            <code>propmap</code> / <code>epc</code>（<code>args.epcs</code> = 1〜6 個。E2・E4・EC は不可）。
+            Web UI の 3 秒の制限は掛けません</td>
+        <td><code>diag</code></td></tr>
+    <tr><td><code>detail</code></td><td>—</td><td>Web UI と同じ形の状態を返します（アダプタの詳細。状態の判定を含みます）</td><td><code>detail</code></td></tr>
+  </table>
+
+  <h4>Web UI と同じ読み出し</h4>
+  <p>Web UI の API（<code>GET …/api/v1/…</code>）と同じ関数・同じ検証を通り、同じ形で返します。返事の <code>topic</code> は入力と同じです。</p>
+  <table style="width:100%;font-size:12px">
+    <tr><th style="text-align:left">topic</th><th style="text-align:left">payload</th><th style="text-align:left">動作（Web UI の何と同じか）</th><th style="text-align:left">出力 2 の topic</th></tr>
+    <tr><td><code>trend</code></td><td><code>{ range: '1h' | '6h' | '24h' }</code> か <code>'6h'</code></td>
+        <td>瞬時電力・R / T 相の電流・LQI の推移を返します（計測値タブのグラフ）。省略すると <code>1h</code> です。直近 24 時間をメモリに持ちます（それより前の記録が要るときは、出力 1 をデータベースなどに保存してください）</td>
+        <td><code>trend</code></td></tr>
+    <tr><td><code>logs</code></td><td><code>{ after?, limit?, level? }</code></td>
+        <td>このアダプタのログを返します（ログタブ）。<code>after</code> より新しいものを古い順に、<code>limit</code> 件（1〜1000。省略すると 200）までです。
+            <code>level</code> は <code>info</code> / <code>warn</code> / <code>error</code>（その重さ以上）です。続きを読むときは、返事の <code>nextSeq</code> を次の <code>after</code> に入れます</td>
+        <td><code>logs</code></td></tr>
+    <tr><td><code>adapters</code></td><td>—</td>
+        <td>全台の一覧と、瞬時電力の合計を返します（左の一覧）。合計は値の届いている有効な台だけで、値の古い台は除き、除いた台数も返します</td>
+        <td><code>adapters</code></td></tr>
+    <tr><td><code>meta</code></td><td>—</td>
+        <td>版（読み込んでいる版 <code>libVersion</code> とディスクの版 <code>diskVersion</code>。違えば Node-RED の再起動が要ります）・
+            <code>readOnly</code>・<code>editorRoot</code>（エディタの入口。settings.js の <code>httpAdminRoot</code>。エディタが無ければ <code>null</code>）・
+            <code>addAdapter</code>（アダプタを追加できるか）・<code>auth</code>（Node-RED の認証の状態）</td>
+        <td><code>meta</code></td></tr>
+  </table>
+  <h4>接続の設定と認証情報（Web UI の設定タブと同じ）</h4>
+  <p>名前・契約・ポートなどの接続の設定と認証情報も、Web UI と同じ検証・同じ保存先で変えられます
+     （変える場所は、Web UI の設定タブ・この入力・エディタの設定ノードの 3 つです。どこから変えても、ほかの 2 つに映ります）。
+     接続に関わる項目（<code>mode</code>・<code>serialport</code>・<code>serialbaud</code>・<code>deviceKey</code>・<code>expectedMac</code>・認証情報）が変わると、
+     <b>この設定ノードの台だけ</b>セッションを終了してポートを閉じ、新しい値で開き直します（30〜90 秒止まります。このノードの出力は止まらず、
+     一時的な上書きも引き継ぎます）。それ以外は開き直さずに効きます。開き直しの最中に次の接続の設定か認証情報を送ると
+     <code>error</code>（<code>BUSY</code>）、ほかの台が使っているポートは <code>error</code>（<code>PORT_IN_USE</code>）です。
+     settings.js の <code>readOnly</code>・<code>uiConfig: false</code> は Web UI だけに効き、この入力には掛かりません。</p>
+  <table style="width:100%;font-size:12px">
+    <tr><th style="text-align:left">topic</th><th style="text-align:left">payload</th><th style="text-align:left">動作（Web UI の何と同じか）</th><th style="text-align:left">出力 2 の topic</th></tr>
+    <tr><td><code>config</code></td>
+        <td><code>{ name?, role?, enabled?, mode?, serialport?, serialbaud?, deviceKey?, expectedMac?, autoStart?, scanDurations? }</code></td>
+        <td>接続の設定を保存して効かせます（「接続の設定を保存…」）。値を <code>null</code> にするとその項目を設定ノードの値に戻します。
+            <code>serialport</code> に <code>'simulator'</code> を渡すとシミュレーターにします。<code>msg.rev</code> があれば版を照合します。
+            範囲: <code>serialbaud</code> は 2400・4800・9600・19200・38400・57600・115200、<code>expectedMac</code> は 16 桁の 16 進数か空、
+            <code>deviceKey</code> は英数字と <code>_</code> <code>-</code> で 32 文字までか空、<code>scanDurations</code> は 2〜14 の整数を 1〜8 個
+            （配列か <code>'4,5,6'</code>）、<code>name</code> は 100 文字・<code>role</code> は 32 文字まで</td>
+        <td><code>config</code></td></tr>
+    <tr><td><code>config-reset</code></td><td>—</td><td>Web UI かフローで変えた接続の設定を全部外して、設定ノードの値に戻します</td><td><code>config</code></td></tr>
+    <tr><td><code>get-config</code></td><td>—</td><td>今の接続の設定を読みます（設定タブの「アダプタと接続」）</td><td><code>config</code></td></tr>
+    <tr><td><code>credentials</code></td><td><code>{ routeBId, routeBPassword }</code></td>
+        <td>認証情報を保存します（認証 ID は 32 桁の 16 進数、パスワードは 12 桁の英数字）。
+            <b>返事に値は入れません</b>（入力の <code>payload</code> は返事で置き換わります）。環境変数があるときは保存しても効きません。<br>
+            <b>注意</b>: <code>inject</code> や <code>change</code> ノードに値を書くと、その値はそのノードの設定として <code>flows.json</code> に<b>平文</b>で残ります
+            （フローの書き出しと、Node-RED のプロジェクトの git にも入ります。エディタの設定ノードの欄とは違い、暗号化されません）。
+            値を置いたまま残さないでください: 一度だけ送ってからノードの値を消すか、Web UI の設定タブかエディタの設定ノードで入れます。
+            環境変数 <code>WSUHA_BROUTE_ID_&lt;キー&gt;</code>・<code>WSUHA_BROUTE_PASSWORD_&lt;キー&gt;</code> を置けば、この入力は要りません（環境変数が優先されます）。
+            別の名前の環境変数から送るなら、<code>change</code> ノードの JSONata で <code>$env('…')</code> と書けば、値はフローに残りません</td>
+        <td><code>credentials</code></td></tr>
+    <tr><td><code>credentials-reset</code></td><td>—</td><td>Web UI かフローで保存した認証情報を消します（設定ノードの値に戻ります）</td><td><code>credentials</code></td></tr>
+    <tr><td><code>serialports</code></td><td>—</td><td>ポートの候補を返します（<code>/dev/serial/by-id/…</code> を先に、シミュレーターの候補を最後に 1 つ）</td><td><code>serialports</code></td></tr>
+    <tr><td><code>add-adapter</code></td><td><code>{role, name?, mode, serialport?, serialbaud?, deviceKey?, expectedMac?, autoStart?, routeBId?, routeBPassword?}</code></td><td>アダプタを追加します（Web UI の［アダプタを追加］と同じです。動作を確かめた版の Node-RED だけで使えます。使えるかどうかは <code>meta</code> の <code>addAdapter</code> で分かります。タブ「B ルート（Web UI で追加）」に B ルートノードも追加します）。値を inject に書くと flows.json に平文で残るので、認証情報はあとで Web UI かエディタで入れてください</td><td><code>add-adapter</code></td></tr>
+  </table>
+
+  <p>範囲: 取得間隔 15〜3600 秒、定期的に取りに行く値 1〜6 個（<code>E2</code>・<code>E4</code>・<code>EC</code> は不可）、
+     積算の取得間隔 60〜3600 秒、定時積算の取得間隔 300〜7200 秒。
+     外れていたら出力 2 に <code>error</code>（<code>payload.code</code> = <code>VALIDATION</code>、項目ごとの理由は <code>payload.details</code>）を出し、何も変えません。</p>
+
+  <p><b>EPC の書き方</b>: 文字列（<code>'E7'</code>）は 16 進として読みます。
+     数値（<code>0xE7</code>）はその値のまま使います。
+     <code>'80'</code> を 10 進と解釈して別の値を取りに行く、という誤りを防ぐためです。</p>
+
+  <h3>出力の形 — 全部 JSON のオブジェクト</h3>
+  <p>出力 1 と出力 2 の <code>msg.payload</code> は、<b>どの topic でも、JSON にそのまま変換できるただのオブジェクト</b>です
+     （文字列・Buffer・日付のオブジェクト・<code>undefined</code> の値は入れません。<code>JSON.parse(JSON.stringify(payload))</code> が元と同じ）。
+     後ろに <code>json</code> ノードやパーサーを挟まずに、<code>change</code>・<code>switch</code>・<code>function</code>・DB や MQTT のノードへそのままつなげます。
+     数は数のまま（<code>"746"</code> ではなく <code>746</code>）です。</p>
+  <p>時刻は <code>at</code>（ミリ秒の数）と <code>ts</code>（ISO 8601 の文字列。ローカルの時差つき。例 <code>2026-11-06T09:30:00+09:00</code>）の 2 つです。
+     ただし <code>log</code> の <code>ts</code> だけはミリ秒の数です（<code>at</code> も同じ値）。</p>
+  
+  <h3>出力 1 — 計測値</h3>
+  <p><b>1 回の取得につき 1 通</b>、正規化した JSON を出します。</p>
+  <dl class="message-properties">
+    <dt>payload.device / deviceKey / port</dt><dd>契約名（動力 / 電力）、デバイスキー、ポート</dd>
+    <dt>payload.ts <span class="property-type">string</span></dt><dd>取得時刻（ISO 8601、ローカル時差つき）</dd>
+    <dt>payload.esv <span class="property-type">string</span></dt><dd>ECHONET Lite の応答の種類（<code>Get_Res</code> など）</dd>
+    <dt>payload.meter <span class="property-type">object</span></dt>
+    <dd>PAN ID・チャネル・LQI など。LQI は、応答を受け取ったときの受信の強さ（RSSI）から ROHM の換算式（RSSI ≒ 0.275 × LQI − 104.27）を逆に解いて求めた近似値です。
+        接続の間も応答ごとに変わります。メーターを探したときの LQI はアダプタが返す値そのままなので、応答ごとの値とは少し差が出ることがあります。</dd>
+    <dt>payload.values <span class="property-type">object</span></dt>
+    <dd>この 1 回で取れた値。<code>instantPower</code>（<code>{ value, unit: 'W', epc: 'E7', name, display }</code>）/
+        <code>instantCurrent</code>（<code>{ r, t, total, unit: 'A', … }</code>）/
+        <code>cumulativeForward</code>（<code>{ value, unit: 'kWh', raw, … }</code>）… のように名前で引けます</dd>
+    <dt>payload.all <span class="property-type">object</span></dt>
+    <dd>これまでに取れた全部（<code>values</code> と同じ形に、取得時刻 <code>at</code>（ISO の文字列）と、この 1 回で取れたかの <code>fresh</code>）</dd>
+    <dt>payload.calibration・partial・unknown</dt>
+    <dd>積算の換算（<code>{ coefficient, unitFactor, digits }</code>）・メーターが一部を返さなかった（Get_SNA）ときの <code>true</code>・名前の無い EPC</dd>
+  </dl>
+
+  <h3>出力 2 — 状態の変化とイベント</h3>
+  <table style="width:100%;font-size:12px">
+    <tr><th style="text-align:left">topic</th><th style="text-align:left">いつ</th><th style="text-align:left">payload</th></tr>
+    <tr><td><code>status</code></td><td>状態が変わったとき・<code>status</code> などの入力</td>
+        <td>状態の全部（<code>{ device, deviceKey, port, phase, phaseText, running, portOpen, connected, meter, overrides, counters, lastError, known, …, health, credentials, ts, at }</code>）。
+            <code>payload.health</code> に Web UI と同じ状態の判定
+            （<code>{ level, title, reasons, nextAction }</code>。level は ok / busy / stale / bad / stopped / idle / disabled）。
+            <code>payload.credentials</code> は Web UI と同じ <code>{ configured, source, pairId }</code>。アダプタの版と MAC は <code>adapter</code>。
+            <code>payload.pendingCommands</code> は預かっている指示の数といちばん古いものの待ち時間（<code>{ count, oldestMs }</code>。0 件なら <code>oldestMs</code> は <code>null</code>）。
+            <code>payload.connectHint</code> はつながらない理由の手がかり（<code>{ kind: 'credentials' | 'no-meter', since, rounds }</code>。無ければ <code>null</code>）。
+            <code>payload.counters</code> は回数の累計（<code>{ tx, rx, failures, timeouts, joins, reconnects, resends, resendRecovered, targetedScans, fullScans }</code>。
+            <code>resends</code> は応答が無くて送り直した回数、<code>resendRecovered</code> は送り直して値が取れた回数、
+            <code>targetedScans</code> は知っているチャネルだけを探した回数、<code>fullScans</code> は全部のチャネルを探した回数）</td></tr>
+    <tr><td><code>phase</code></td><td>接続の段階が変わったとき</td>
+        <td><code>{ device, deviceKey, from, to, reason, text, at, ts }</code>（<code>from</code>・<code>to</code> は段階の名前、<code>text</code> は日本語）</td></tr>
+    <tr><td><code>event</code></td><td>アダプタの自発イベント（<code>EVENT 29</code> など）</td>
+        <td><code>{ device, deviceKey, kind: 'event', raw, num, numHex, name, severity, sender, side, param, udp?, at, ts }</code>
+            （<code>num</code> は数、<code>raw</code> は受け取った行）</td></tr>
+    <tr><td><code>log</code></td><td>動作ログ（設定の「動作ログ」を入れたとき）</td>
+        <td><code>{ device, deviceKey, level, text, phase, ts, at }</code>。<code>level</code> は debug / tx / info / good / warn / error。
+            <code>text</code> は伏せ字済み。<code>ts</code> はミリ秒の数</td></tr>
+    <tr><td><code>raw</code></td><td>受信した生の行（設定の「受信した生の行」を入れたとき）</td>
+        <td><code>{ device, deviceKey, at, ts, line, kind, parsed }</code>。<code>line</code> は受け取った行（伏せ字済み）。
+            <code>kind</code> は <code>ok</code> / <code>fail</code> / <code>event</code> / <code>erxudp</code> / <code>epandesc</code> / <code>eedscan</code> /
+            <code>etable</code> / <code>einfo</code> / <code>ever</code> / <code>eappver</code> / <code>esreg</code> / <code>epong</code> / <code>ipv6</code> /
+            <code>echo</code> / <code>other</code>。<code>parsed</code> は種類ごとの項目:
+            <code>erxudp</code> は <code>{ sender, dest, rport, lport, senderLla, rssiHex, secured, side, datalen, data, encoding, echonet }</code>
+            （<code>echonet</code> は <code>{ tid, seoj, deoj, esv, esvName, opc, props: [{ epc: 'E7', name, unit, value, display, … }] }</code>）、
+            <code>event</code> は <code>{ num, numHex, name, severity, sender, side, param }</code>、<code>fail</code> は <code>{ code, message, advice, retryable }</code>、
+            表や <code>EPANDESC</code> の続きの行は <code>{ part: 'start' | 'field' | 'row' | 'data', … }</code>。
+            <code>SKSET…</code> のエコーの引数は写しません</td></tr>
+    <tr><td><code>command-result</code></td><td><code>command</code> の入力への返事</td>
+        <td><code>{ device, deviceKey, command, ok, at, ts, lines, parsed, error, result }</code>。
+            <code>lines</code> はこのコマンドの間に受け取った行、<code>parsed</code> はコマンドごとの項目:
+            <code>SKINFO</code> → <code>{ ipv6, mac, channel, channelHex, channelMHz, panId, side, addr16 }</code>・
+            <code>SKVER</code> → <code>{ version }</code>・<code>SKAPPVER</code> → <code>{ appVersion }</code>・
+            <code>ROPT</code> → <code>{ wopt, woptHex, erxudpFormat: 'hex' | 'binary' }</code>・
+            <code>SKSREG</code> → <code>{ register, raw, value, unit, meaning, description, text }</code>・
+            <code>SKTABLE</code> → <code>{ table, name, title, rows: [{ tokens, … }] }</code>・<code>SKLL64</code> → <code>{ mac, ipv6 }</code>。
+            知らないコマンドは <code>parsed: null</code>（<code>lines</code> は残ります）。
+            アダプタが <code>FAIL</code> を返した・応答が無いときも <code>ok: false</code>・<code>error: { code: 'ER06', message, advice, retryable }</code> で出し、
+            続けて <code>error</code> を出します。<code>result</code> は応答の値をまとめた古い形で、成功のときだけ入ります。<code>SKSET…</code> の値は <code>command</code> に写しません</td></tr>
+    <tr><td><code>settings</code></td>
+        <td>運用設定が変わったとき（Web UI かフローの入力で変えたとき。エディタで設定ノードの値を変えてデプロイし、運用設定が外れたときも同じです）。
+            同じ設定ノードを使っている全部の <code>wsuha-broute</code> から 1 通ずつ
+            （「状態の変化とイベント」の入切に関係なく出ます。入力で変えたノードからは、その返事の 1 通だけ）。
+            <code>settings</code> / <code>settings-reset</code> / <code>get-settings</code> の入力への返事も同じ形</td>
+        <td>今の設定。項目ごとに値・出どころ（<code>source</code>）・運用設定そのものの値（<code>runtimeValue</code>。
+            一時的な上書きの下にあっても出ます。無ければ <code>null</code>）・変えた経路と時刻。<code>msg.changedBy</code> に変えた経路
+            （<code>web-ui</code> = Web UI / <code>flow:&lt;ノードの名前&gt;</code> = フロー / <code>editor</code> = エディタ）。
+            <code>get-settings</code> の返事には <code>changedBy</code> を付けません（変化ではないため）。
+            記録や通知に配線できます</td></tr>
+    <tr><td><code>config</code></td>
+        <td>接続の設定（と認証情報の出どころ）が変わったとき（Web UI かフローの入力で変えたとき。エディタで設定ノードの値を変えてデプロイし、値が外れたときも同じです）。
+            同じ設定ノードを使っている全部の <code>wsuha-broute</code> から 1 通ずつ（入力で変えたノードからは、その返事の 1 通だけ）。
+            <code>config</code> / <code>config-reset</code> / <code>get-config</code> の入力への返事も同じ形</td>
+        <td>今の接続の設定。項目ごとに値・出どころ（<code>source</code>: <code>runtime</code> = Web UI かフロー / <code>config</code> = 設定ノード / <code>default</code>）・
+            Web UI かフローの値（<code>runtimeValue</code>）・設定ノードの値（<code>configValue</code>）・開き直す項目か（<code>connection</code>）・変えた経路と時刻。
+            <code>credentials</code> は <code>{ configured, source, pairId, envOverrides, stored }</code> だけ（値は入りません）。
+            <code>applying</code> は開き直しの最中。<code>msg.changedBy</code> に変えた経路</td></tr>
+    <tr><td><code>credentials</code></td><td><code>credentials</code> / <code>credentials-reset</code> の入力への返事</td>
+        <td><code>{ configured, source, pairId, envOverrides, stored }</code>（値は入りません）</td></tr>
+    <tr><td><code>serialports</code></td><td><code>serialports</code> の入力への返事</td>
+        <td><code>{ items: [{ path, label, manufacturer, serialNumber, vendorId, productId, byId, realPath, byIdPath, portLabel, simulator, ownedBy, kind, hint, usedBy, aliases }], at, serialportAvailable, serialportMessage }</code>。
+            機器ごとに 1 件で、同じ機器のほかの名前（<code>/dev/ttyUSB0</code> など）は <code>aliases</code> に入ります。
+            <code>kind</code> は <code>wsuha</code>（Wi-SUN アダプタ）/ <code>maybe</code>（かもしれない）/ <code>other</code>（ほかの機器）で、<code>hint</code> はその説明です。
+            <code>usedBy</code> はそのポートを使っている台かフローのノード（<code>{ kind: 'adapter' | 'flow', id, name, type }</code>。無ければ <code>null</code>）、
+            <code>ownedBy</code> は使っている台（<code>{ id, name }</code>）。
+            <code>serialport</code> を読み込めないときは <code>serialportAvailable</code> が <code>false</code> で、<code>serialportMessage</code> に入れ方が入ります</td></tr>
+    <tr><td><code>add-adapter</code></td><td><code>add-adapter</code> の入力への返事</td><td><code>{ok, message, adapter, nodes, started, warnings}</code>。値は入れません</td></tr>
+    <tr><td><code>diag</code></td><td><code>diag</code> の入力への返事</td>
+        <td>Web UI の診断（<code>POST …/diag</code>）と同じ形:
+            <code>{ ok, name, at, ts, device, deviceKey, command, lines, parsed, error, commands, result: { lines, values? } }</code>。
+            <code>command</code> は送ったもの（<code>info</code> は <code>'SKINFO / SKVER / SKAPPVER'</code>、<code>epc</code>・<code>propmap</code> は <code>'Get E7 E8'</code>）。
+            <code>parsed</code> は <code>command-result</code> と同じ項目（<code>info</code> は 3 つを 1 つにまとめた
+            <code>{ ipv6, mac, channel, …, version, appVersion }</code>、<code>epc</code>・<code>propmap</code> は <code>{ values: { E7: { epc, name, value, unit, display, … } } }</code>）。
+            <code>commands</code> は SK コマンドごとの <code>{ command, ok, lines, parsed, error }</code>。
+            アダプタが <code>FAIL</code> を返したときは <code>ok: false</code>・<code>error</code> の <code>diag</code> を出してから、<code>error</code>（<code>DEVICE_ERROR</code>）を出します</td></tr>
+    <tr><td><code>detail</code></td><td><code>detail</code> の入力への返事</td><td>Web UI と同じ形の状態（アダプタの詳細。<code>health</code>・<code>meter</code>・<code>counters</code>・<code>credentials</code>・
+        <code>pendingCommands</code> など）</td></tr>
+    <tr><td><code>read</code></td><td><code>read</code> の入力への返事（入力の msg を引き継ぐ）</td>
+        <td><code>{ device, deviceKey, ts, at, maxAgeSec, values: { &lt;名前&gt;: { epc, name, value, unit, display, at, ts, fresh, ageSec, … } }, missing, refreshed }</code>。
+            <code>values</code> は出力 1 の <code>all</code> と同じ名前と中身、<code>missing</code> はまだ一度も取れていない値の EPC、
+            <code>refreshed</code> は今回メーターへ取りに行った EPC（上の「最新値の読み出し」）</td></tr>
+    <tr><td><code>trend</code></td><td><code>trend</code> の入力への返事</td>
+        <td><code>{ series: { power, currentR, currentT, lqi }, from, to }</code>。系列は <code>[時刻, 値]</code> の配列（1 系列 720 点まで間引く。
+            <code>lqi</code> は落ち込みを隠さないよう、間引く枠の中の最小を残します）</td></tr>
+    <tr><td><code>logs</code></td><td><code>logs</code> の入力への返事</td>
+        <td><code>{ items: [{ seq, at, level, text }], nextSeq, dropped }</code>。<code>text</code> は伏せ字済み。<code>dropped</code> はリングから落ちて読めなかった行の数です</td></tr>
+    <tr><td><code>adapters</code></td><td><code>adapters</code> の入力への返事</td>
+        <td><code>{ items, total: { power, count, enabled, staleCount } }</code>。<code>items</code> の並びは状態の重い順で、同じなら名前の順です。
+            <code>total.power</code> は <code>count</code> 台の合計 [W]（無ければ <code>null</code>）、<code>enabled</code> は有効な台の数、
+            <code>staleCount</code> は値が古いため除いた台の数</td></tr>
+    <tr><td><code>meta</code></td><td><code>meta</code> の入力への返事</td>
+        <td><code>{ apiVersion, libVersion, diskVersion, startedAt, nodeRed, readOnly, configLocked, editorRoot, addAdapter, auth }</code>
+            （<code>configLocked</code> は settings.js の <code>wsuhaBroute.uiConfig</code> が <code>false</code> で、Web UI から接続の設定を変えられないとき。
+            <code>addAdapter</code> は Web UI とフローからアダプタを追加できるか（<code>{ available, reason, count, limit, … }</code>）。
+            <code>auth</code> は Node-RED の認証の状態（<code>{ required, available, editorPath, nodeRoot }</code>））</td></tr>
+    <tr><td><code>error</code></td><td>入力の指示が失敗したとき</td>
+        <td><code>{ device, deviceKey, action, message, code?, details?, waitedMs?, ts, at }</code>（<code>ts</code> は ISO の文字列）。
+            <code>code</code> は Web UI と同じ（<code>VALIDATION</code> / <code>REVISION_MISMATCH</code> / <code>FORBIDDEN_COMMAND</code> / <code>DISABLED</code> /
+            <code>NOT_CONNECTED</code> / <code>PORT_DOWN</code> / <code>DEVICE_ERROR</code> / <code>TIMEOUT</code> / <code>BUSY</code> /
+            <code>STOPPED_BY_OVERRIDE</code> / <code>SHUTDOWN</code> など。読めないものは付きません）。
+            <code>waitedMs</code> は、預かったものがつながらないまま待つ長さを過ぎた（<code>NOT_CONNECTED</code>）ときの待った長さ [ミリ秒]。
+            <code>details</code> は項目ごとの理由（<code>interval</code>・<code>epcs</code> の検証の失敗も <code>VALIDATION</code> と <code>details</code>）。
+            ノードのエラーにもなるので、Catch ノードで拾えます</td></tr>
+    <tr><td><code>alert</code></td><td>つながらない状態が続いた（設定の回数）</td>
+        <td><code>{ device, deviceKey, port, phase, consecutiveFailures, ladder, reason, ts, at }</code>（<code>ts</code> は ISO の文字列）</td></tr>
+    <tr><td><code>recovered</code></td><td><code>alert</code> のあと、主な値（瞬時電力など）がまた届いた（つながっただけでは流しません）</td><td><code>status</code> と同じ形</td></tr>
+  </table>
+  <p>Web UI からの操作（停止・再接続など）も、<code>status</code> / <code>phase</code> / <code>event</code> / <code>log</code> として流れます。</p>
+
+  <h3>単位と換算について</h3>
+  <ul>
+    <li><b>瞬時電力（0xE7）</b> は符号付きです。太陽光発電などで逆潮流しているときは負の値になります。</li>
+    <li><b>瞬時電流（0xE8）</b> は R 相と T 相を別々に返します。単相 2 線式のメーターは
+        T 相にオーバーフロー値を入れてくるので、その場合は T 相を「なし」として扱います。</li>
+    <li><b>積算電力量（0xE0 / 0xE3）</b> は生のカウント値です。
+        接続直後に取得する<b>係数（0xD3）</b> と<b>単位（0xE1）</b> を掛けて kWh に換算します。
+        係数がそろうまでは「未換算」と表示し、kWh の値は出しません。</li>
+  </ul>
+
+  <h3>注意</h3>
+  <ul>
+    <li>取得間隔の下限は 15 秒です。1 回の送信は <code>OK</code> と <code>EVENT 21</code> の
+        両方が返るまで次を出せないため、短くしても要求は積み上がりません。</li>
+    <li>電波の送信時間の上限（ARIB STD-T108。<code>EVENT 32</code>）に達している間は、
+        電波を使うコマンドを送りません。</li>
+    <li><code>WOPT</code> / <code>WUART</code> / <code>SKSAVE</code> / <code>SKERASE</code> は
+        内部 FLASH を消耗するため、<code>command</code> からは実行できません。</li>
+  </ul>
+</script>

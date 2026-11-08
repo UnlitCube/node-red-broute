@@ -1,0 +1,59 @@
+{
+  "name": "@unlitcube/node-red-broute",
+  "version": "2.0.0-beta.3",
+  "type": "commonjs",
+  "description": "Read Japanese low-voltage smart meters over the B-route with a Wi-SUN USB adapter (tested with RATOC RS-WSUHA). 低圧スマートメーターの B ルート計測ノードと Web UI。",
+  "keywords": [
+    "node-red",
+    "wi-sun",
+    "wisun",
+    "b-route",
+    "Bルート",
+    "echonet",
+    "echonet-lite",
+    "smart-meter",
+    "smartmeter",
+    "スマートメーター",
+    "wsuha",
+    "rs-wsuha",
+    "bp35c0",
+    "skstack"
+  ],
+  "license": "MIT",
+  "author": "UnlitCube",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UnlitCube/node-red-broute.git"
+  },
+  "homepage": "https://github.com/UnlitCube/node-red-broute#readme",
+  "bugs": {
+    "url": "https://github.com/UnlitCube/node-red-broute/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "node-red": {
+    "version": ">=3.1.0",
+    "nodes": {
+      "wsuha-device": "nodes/wsuha-device.js",
+      "wsuha-broute": "nodes/wsuha-broute.js"
+    }
+  },
+  "scripts": {
+    "test": "node test/run-all.js"
+  },
+  "files": [
+    "lib/",
+    "nodes/",
+    "ui/",
+    "examples/",
+    "docs/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "optionalDependencies": {
+    "serialport": "^12.0.0"
+  }
+}

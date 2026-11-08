@@ -1,0 +1,1160 @@
+<script type="text/javascript">
+  ;(function () {
+    // =========================================================================
+    //  Wi-SUN アダプタ（wsuha-device）の編集画面。
+    //   - 名前だけタブの上。その下に RED.tabs の「基本設定」「詳細設定」（mqtt-broker と同じ作り）。
+    //     どの項目をどちらに置くかの正は lib/runtime/config-fields.js と settings-store.js の tier（試験で突き合わせる）。
+    //   - 契約は select（未設定 / 電力 / 動力 / その他（名前を入力））。datalist は使わない。
+    //   - ポートは文字の欄と 🔍（serial-port ノードと同じ autocomplete で、今の値に関係なく全部の候補を出す）。
+    //   - 検証の範囲（取得間隔・名前の長さ・通信速度など）は、サーバーの registerType の settings（wsuhaDeviceRanges）から読む。
+    //     HTML に数字を直書きしない（サーバーの検証と同じ値。届かなければ、ここでは確かめずにサーバーに任せる）。
+    // =========================================================================
+
+    /** サーバーの検証の範囲（nodes/wsuha-device.js の editorRanges）。届かなければ null。 */
+    function ranges() {
+      return (RED.settings && RED.settings.wsuhaDeviceRanges) || null
+    }
+    const CONTROL = /[\u0000-\u001f\u007f]/
+    /** 契約の決まった値（Web UI の設定タブ・追加の画面と同じ選択肢）。 */
+    const ROLE_FIXED = ['電力', '動力']
+    const ROLE_OTHER = '_other'
+
+    function blank(v) {
+      return v === undefined || v === null || String(v).trim() === ''
+    }
+
+    /** 空か、範囲の中の整数（運用設定の検証と同じ。範囲は ranges()[field]）。 */
+    function wsuhaRange(field) {
+      return function (v) {
+        if (blank(v)) return true
+        const r = ranges()
+        if (!r || !r[field]) return true
+        const t = String(v).trim()
+        return /^\d+$/.test(t) && +t >= r[field].min && +t <= r[field].max
+      }
+    }
+
+    /** 文字の項目（名前・契約）: 前後の空白を外して maxLength まで・改行や制御文字なし（サーバーの checkField と同じ）。 */
+    function wsuhaText(field) {
+      return function (v) {
+        // 「その他で空」を断るのは編集中のノードだけ。契約が空のほかの台の検証に、開いている編集画面の選択を持ち込まない
+        if (blank(v)) return !(field === 'role' && editing && editing.node === this && editing.other())
+        const s = String(v).trim()
+        if (CONTROL.test(s)) return false
+        const r = ranges()
+        return !r || !r[field] || s.length <= r[field].maxLength
+      }
+    }
+
+    /** 空か、EPC（16 進 2 桁。0x は付けてもよい）をカンマか空白で区切った個数の範囲。履歴（bulky）は不可。 */
+    function wsuhaEpcList(v) {
+      if (blank(v)) return true
+      const r = ranges()
+      const bulky = r && r.pollEpcs && r.pollEpcs.bulky ? r.pollEpcs.bulky : []
+      const seen = []
+      const parts = String(v).split(/[\s,]+/)
+      for (let i = 0; i < parts.length; i++) {
+        if (!parts[i]) continue
+        const t = parts[i].replace(/^0x/i, '').toUpperCase()
+        if (!/^[0-9A-F]{2}$/.test(t)) return false
+        if (bulky.indexOf(t) >= 0) return false
+        if (seen.indexOf(t) < 0) seen.push(t)
+      }
+      if (!r || !r.pollEpcs) return seen.length >= 1
+      return seen.length >= r.pollEpcs.min && seen.length <= r.pollEpcs.max
+    }
+
+    function wsuhaKey(v) {
+      if (blank(v)) return true
+      const r = ranges()
+      const max = r && r.deviceKey ? r.deviceKey.maxLength : 32
+      return new RegExp('^[A-Za-z0-9_-]{1,' + max + '}$').test(String(v).trim())
+    }
+
+    function wsuhaMac(v) {
+      if (blank(v)) return true
+      return /^[0-9A-F]{16}$/.test(String(v).trim().replace(/[:-]/g, '').toUpperCase())
+    }
+
+    function wsuhaBaud(v) {
+      if (blank(v)) return true
+      const r = ranges()
+      if (!r || !r.bauds) return /^\d+$/.test(String(v).trim())
+      return r.bauds.indexOf(+String(v).trim()) >= 0 && /^\d+$/.test(String(v).trim())
+    }
+
+    function wsuhaDurations(v) {
+      if (blank(v)) return true
+      const r = ranges()
+      const d = r && r.scanDurations
+      const parts = String(v).split(/[\s,]+/).filter(function (x) {
+        return x !== ''
+      })
+      if (!parts.length) return true
+      if (d && parts.length > d.maxItems) return false
+      for (let i = 0; i < parts.length; i++) {
+        if (!/^\d+$/.test(parts[i])) return false
+        if (d && (+parts[i] < d.min || +parts[i] > d.max)) return false
+      }
+      return true
+    }
+
+    /**
+     * 模擬設定: 空か、JSON のオブジェクト（実行時の simulatorOptionsOf と同じ）。
+     * シミュレーターの台だけ見る。実機の台ではこの欄が隠れていて使わないので、見えない欄の誤りでノードを赤くしない。
+     */
+    function wsuhaSimOptions(v) {
+      if (blank(v)) return true
+      const mode = editing && editing.node === this ? editing.mode() : this && this.mode
+      if (mode !== 'simulator') return true
+      if (typeof v === 'object') return !Array.isArray(v)
+      try {
+        const o = JSON.parse(v)
+        return !!o && typeof o === 'object' && !Array.isArray(o)
+      } catch (e) {
+        return false
+      }
+    }
+
+    /** ポートの短い名前（lib/runtime/config-fields.js の portLabelOf と同じ規則。エディタは実体を読めないので by-id は末尾 16 文字）。 */
+    function portShort(mode, port) {
+      if (mode === 'simulator' || port === 'simulator') return 'シミュレーター'
+      const p = String(port || '').trim()
+      if (!p) return 'ポート未設定'
+      let m = /(?:^|\/)tty(USB|ACM)(\d+)$/.exec(p)
+      if (m) return m[1] + m[2]
+      m = /^(?:\\\\\.\\)?(COM\d{1,3})$/i.exec(p)
+      if (m) return m[1].toUpperCase()
+      const base = p.split(/[\\/]/).pop() || p
+      return base.length > 16 ? '…' + base.slice(-16) : base
+    }
+
+    /** ノードの表示の元（名前 → 契約 → シミュレーター → ポートの短い名前 → 「Wi-SUN アダプタ」）。 */
+    function baseLabel(n) {
+      if (!blank(n.name)) return String(n.name).trim()
+      if (!blank(n.role)) return String(n.role).trim()
+      if (n.mode === 'simulator') return 'シミュレーター'
+      if (!blank(n.serialport)) return portShort(n.mode, n.serialport)
+      return 'Wi-SUN アダプタ'
+    }
+
+    /** 編集画面を開いている間の状態（{node, other, mode}）。検証が、編集中のノードの今の選択を見るため。閉じたら null。 */
+    let editing = null
+
+    RED.nodes.registerType('wsuha-device', {
+      category: 'config',
+      // 編集画面の題「Wi-SUN アダプタ ノードを編集」と、B ルートノードの「新規に Wi-SUN アダプタ を追加...」
+      paletteLabel: 'Wi-SUN アダプタ',
+      defaults: {
+        name: { value: '', validate: wsuhaText('name') },
+        enabled: { value: true },
+        role: { value: '', validate: wsuhaText('role') },
+        mode: { value: 'serial' },
+        serialport: { value: '' },
+        serialbaud: { value: 115200, validate: wsuhaBaud },
+        deviceKey: { value: '', validate: wsuhaKey },
+        expectedMac: { value: '', validate: wsuhaMac },
+        // 範囲は画面とフローの運用設定と同じ（wsuhaDeviceRanges。空は既定）
+        pollInterval: { value: 30, validate: wsuhaRange('pollIntervalSec') },
+        pollEpcs: { value: 'E7, E8', validate: wsuhaEpcList },
+        // 積算 / 定時積算の取得間隔 [秒]。空なら既定。1.x のフローには無い（空と同じ）
+        slowIntervalSec: { value: '', validate: wsuhaRange('slowIntervalSec') },
+        halfHourIntervalSec: { value: '', validate: wsuhaRange('halfHourIntervalSec') },
+        autoStart: { value: true },
+        autoWriteWopt: { value: true },
+        scanDurations: { value: '4,5,6,7,8', validate: wsuhaDurations },
+        simulatorOptions: { value: '', validate: wsuhaSimOptions },
+      },
+      // 認証 ID も password の型にする（理由は nodes/wsuha-device.js の registerType）
+      credentials: {
+        routeBId: { type: 'password' },
+        routeBPassword: { type: 'password' },
+      },
+      // 表示: 名前 → 契約 → シミュレーター → ポートの短い名前 → 「Wi-SUN アダプタ」。
+      // 同じ表示の設定ノードが 2 つ以上あるときだけ、「電力（USB0）」のようにポートの短い名前を添える
+      label: function () {
+        const self = this
+        const base = baseLabel(self)
+        const port = portShort(self.mode, self.serialport)
+        if (base === port || base === 'Wi-SUN アダプタ') return base
+        let same = 0
+        if (RED.nodes && typeof RED.nodes.eachConfig === 'function') {
+          RED.nodes.eachConfig(function (n) {
+            if (n.type === 'wsuha-device' && n.id !== self.id && baseLabel(n) === base) same++
+          })
+        }
+        return same > 0 ? base + '（' + port + '）' : base
+      },
+      oneditprepare: function () {
+        const node = this
+        const R = ranges()
+
+        // --- タブ（基本設定 / 詳細設定）。開くときは毎回「基本設定」から ---------------------
+        let tabs = null
+        if (RED.tabs && typeof RED.tabs.create === 'function') {
+          tabs = RED.tabs.create({
+            id: 'wsuha-device-tabs',
+            onchange: function (tab) {
+              $('#wsuha-device-tabs-content').children().hide()
+              $('#' + tab.id).show()
+            },
+          })
+          tabs.addTab({ id: 'wsuha-device-tab-basic', label: '基本設定' })
+          tabs.addTab({ id: 'wsuha-device-tab-advanced', label: '詳細設定' })
+          setTimeout(function () {
+            tabs.resize()
+          }, 0)
+        }
+        // 詳細設定に出ている注記（画面かフローの値）と入力の誤りの数を、タブの名前に出す（開かなくても気づけるように）
+        const ADVANCED = ['enabled', 'autoStart', 'serialbaud', 'deviceKey', 'expectedMac', 'scanDurations', 'slowIntervalSec', 'halfHourIntervalSec', 'credentials']
+        const notes = {}
+        function markNote(key, on) {
+          notes[key] = !!on
+          markAdvanced()
+        }
+        function advancedProblems() {
+          const items = ADVANCED.filter(function (k) {
+            return notes[k]
+          })
+          ;['serialbaud', 'deviceKey', 'expectedMac', 'scanDurations', 'slowIntervalSec', 'halfHourIntervalSec', 'simulatorOptions'].forEach(function (k) {
+            const d = node._def && node._def.defaults ? node._def.defaults[k] : null
+            const v = $('#node-config-input-' + k).val()
+            if (d && typeof d.validate === 'function' && !d.validate.call(node, v) && items.indexOf(k) < 0) items.push(k)
+          })
+          return items.length
+        }
+        function markAdvanced() {
+          if (!tabs || typeof tabs.renameTab !== 'function') return
+          const n = advancedProblems()
+          tabs.renameTab('wsuha-device-tab-advanced', n ? '詳細設定（' + n + ' 件の注意）' : '詳細設定')
+        }
+        $('#wsuha-device-tab-advanced input, #wsuha-device-tab-advanced select').on('change input', markAdvanced)
+
+        // --- Node-RED 自身の有効 / 無効（設定ノードの下の帯。node.d）。無効のときだけ注意 ---------
+        $('#wsuha-footer-disabled').toggle(node.d === true)
+
+        // --- 有効（詳細設定）。無効のときだけ、基本設定の先頭に帯 ---------------------------------
+        // 前の版のフローや手書きのフローには、enabled・autoStart・autoWriteWopt が無いことがある。実行時は無いものをオンとして扱う。
+        // エディタは無い項目のチェックを外して見せるので、そのまま保存すると false になり、デプロイのあと黙って計測が止まる
+        ;['enabled', 'autoStart', 'autoWriteWopt'].forEach(function (k) {
+          if (node[k] === undefined || node[k] === null) $('#node-config-input-' + k).prop('checked', true)
+        })
+        // 模擬設定は、手書きのフローだとオブジェクトのこともある（実行時は読める）。
+        // そのままでは欄が [object Object] になり、保存すると読めない値に変わるので、JSON の文字にして見せる
+        if (node.simulatorOptions && typeof node.simulatorOptions === 'object') {
+          $('#node-config-input-simulatorOptions').val(JSON.stringify(node.simulatorOptions))
+        }
+        let runtimeDisabled = false
+        function syncEnabledBand() {
+          const off = !$('#node-config-input-enabled').prop('checked')
+          $('#wsuha-disabled-band').toggle(off || runtimeDisabled)
+          $('#wsuha-enable-now').toggle(off)
+          $('#wsuha-disabled-runtime').toggle(!off && runtimeDisabled)
+        }
+        $('#node-config-input-enabled').on('change', syncEnabledBand)
+        $('#wsuha-enable-now').on('click', function (e) {
+          if (e && e.preventDefault) e.preventDefault()
+          $('#node-config-input-enabled').prop('checked', true)
+          syncEnabledBand()
+          markAdvanced()
+        })
+        syncEnabledBand()
+
+        // --- 契約（select） --------------------------------------------------------
+        const roleSel = $('#wsuha-role-select')
+        const roleInput = $('#node-config-input-role')
+        const cur = String(node.role || '').trim()
+        roleSel.val(ROLE_FIXED.indexOf(cur) >= 0 ? cur : cur ? ROLE_OTHER : '')
+        editing = {
+          node: node,
+          other: function () {
+            return roleSel.val() === ROLE_OTHER
+          },
+          mode: function () {
+            return $('#node-config-input-mode').val()
+          },
+        }
+        function syncRole(focus) {
+          const v = roleSel.val()
+          const other = v === ROLE_OTHER
+          $('#wsuha-role-other').toggle(other)
+          if (!other) roleInput.val(v || '')
+          else if (focus && typeof roleInput.trigger === 'function') roleInput.trigger('focus')
+          const empty = other && blank(roleInput.val())
+          $('#wsuha-role-error').text(empty ? '契約の名前を入力してください' : '').toggle(empty)
+        }
+        roleSel.on('change', function () {
+          if (roleSel.val() === ROLE_OTHER && ROLE_FIXED.indexOf(String(roleInput.val() || '').trim()) >= 0) roleInput.val('')
+          syncRole(true)
+        })
+        roleInput.on('input change', function () {
+          syncRole(false)
+        })
+        syncRole(false)
+
+        // --- 接続先とポート ------------------------------------------------------------------
+        function applyMode() {
+          const sim = $('#node-config-input-mode').val() === 'simulator'
+          $('.wsuha-serial-only').toggle(!sim)
+          $('.wsuha-sim-only').toggle(sim)
+        }
+        $('#node-config-input-mode').on('change', function () {
+          applyMode()
+          // 接続先で、認証の状態の 1 行（架空の値はシミュレーターだけのもの）と模擬設定の検証が変わる
+          credState(credServer)
+          markAdvanced()
+        })
+        applyMode()
+
+        // 通信速度（select。選択肢はサーバーの BAUDS。先頭は既定の 115200）
+        const baudSel = $('#node-config-input-serialbaud')
+        if (R && R.bauds) {
+          baudSel.empty()
+          const def = R.defaultBaud
+          const list = [def].concat(
+            R.bauds
+              .filter(function (b) {
+                return b !== def
+              })
+              .sort(function (a, b) {
+                return b - a
+              })
+          )
+          list.forEach(function (b) {
+            baudSel.append($('<option>').attr('value', String(b)).text(b === def ? b + ' bps（既定・RS-WSUHA）' : b + ' bps'))
+          })
+          const now = blank(node.serialbaud) ? String(def) : String(node.serialbaud).trim()
+          if (list.indexOf(+now) < 0) baudSel.append($('<option>').attr('value', now).text(now + ' bps（今の値。この通信速度は使えません）'))
+          baudSel.val(now)
+        }
+
+        // ポートの候補: 🔍 で全部の候補を出す（今の値に関係なく。datalist は今の値に合う候補しか出さない）
+        let portItems = []
+        function usedText(u) {
+          if (!u || u.id === node.id) return ''
+          if (u.kind === 'flow') return '（フロー「' + (u.name || u.id) + '」が使っています）'
+          return '（「' + (u.name || u.id) + '」が使っています）'
+        }
+        function usedByOf(p) {
+          if (p.usedBy) return p.usedBy
+          return p.ownedBy ? { kind: 'adapter', id: p.ownedBy.id, name: p.ownedBy.name } : null
+        }
+        function portItemLabel(p) {
+          const short = p.portLabel || portShort('serial', p.realPath || p.path)
+          let s = short + (p.manufacturer ? ' — ' + p.manufacturer : '') + (p.byId ? '（by-id）' : '')
+          if (p.kind === 'other') s += '（ほかの USB シリアル機器）'
+          return s + usedText(usedByOf(p))
+        }
+        function sameDevice(p, v) {
+          if (!v) return false
+          if (p.path === v || p.realPath === v || p.byIdPath === v) return true
+          return Array.isArray(p.aliases) && p.aliases.indexOf(v) >= 0
+        }
+        function portWarn() {
+          const v = String($('#node-config-input-serialport').val() || '').trim()
+          const p = portItems.filter(function (x) {
+            return sameDevice(x, v)
+          })[0]
+          const u = p ? usedByOf(p) : null
+          let text = ''
+          if (u && u.id !== node.id) text = (u.kind === 'flow' ? 'フロー「' + (u.name || u.id) + '」' : '「' + (u.name || u.id) + '」') + 'が使っているポートです。'
+          else if (p && p.kind === 'other') {
+            text = 'この機器は Wi-SUN アダプタではないようです。違う機器にコマンドを送ると、その機器を使っているフローが止まることがあります。'
+          }
+          $('#wsuha-port-warn').text(text).toggle(!!text)
+        }
+        function loadPorts(open) {
+          $('#wsuha-port-lookup').addClass('disabled')
+          $.getJSON('wsuha-broute/serialports', function (res) {
+            $('#wsuha-port-lookup').removeClass('disabled')
+            portItems = ((res && res.items) || []).filter(function (p) {
+              return p && !p.simulator
+            })
+            // Wi-SUN アダプタらしいもの（wsuha・maybe）を先に。ほかの USB シリアル機器（other）は後ろ
+            portItems.sort(function (a, b) {
+              return (a.kind === 'other' ? 1 : 0) - (b.kind === 'other' ? 1 : 0)
+            })
+            // serialport が無いサーバーでは候補を探せていない。「見つかりません」と言わず、入れ方を出す
+            $('#wsuha-port-hint').text(
+              (res && res.serialportMessage) ||
+                (portItems.length ? portItems.length + ' 個の候補があります（🔍 で全部を出します）。' : 'ポートが見つかりません。パスを直接入力してください。')
+            )
+            portWarn()
+            if (!open || !portItems.length) return
+            const input = $('#node-config-input-serialport')
+            if (typeof input.autocomplete !== 'function') return
+            input
+              .autocomplete({
+                source: portItems.map(function (p) {
+                  return { label: portItemLabel(p), value: p.path }
+                }),
+                minLength: 0,
+                select: function () {
+                  setTimeout(portWarn, 0)
+                },
+                close: function () {
+                  try {
+                    input.autocomplete('destroy')
+                  } catch (e) {
+                    /* 閉じたあとの片付けの失敗は無視する */
+                  }
+                },
+              })
+              .autocomplete('search', '')
+          }).fail(function () {
+            $('#wsuha-port-lookup').removeClass('disabled')
+            $('#wsuha-port-hint').text('ポートの候補を読めませんでした。パスを直接入力してください。')
+          })
+        }
+        $('#wsuha-port-lookup').on('click', function (e) {
+          if (e && e.preventDefault) e.preventDefault()
+          loadPorts(true)
+        })
+        $('#node-config-input-serialport').on('input change', portWarn)
+        loadPorts(false)
+
+        // --- 認証 ID とパスワード -------------------------------------------------------------
+        // 保存済みの値があると、Node-RED は値の代わりにこの印を欄へ入れる（password の型の credentials）
+        const KEPT = '__PWRD__'
+        // シミュレーターの架空の値の出どころ（nodes/wsuha-device.js の SIMULATOR_CREDENTIALS.source と同じ文）
+        const SIMULATOR_SOURCE = 'シミュレーターの架空の値'
+        /** サーバーが返した認証情報の状態。まだ届いていない（未デプロイを含む）ときは null。 */
+        let credServer = null
+        // 書式をその場で確かめる（送ってから FAIL ER06 で気づくより早い）
+        function check() {
+          const id = String($('#node-config-input-routeBId').val() || '').trim()
+          const pw = String($('#node-config-input-routeBPassword').val() || '').trim()
+          const problems = []
+          if (id && id !== KEPT && !/^[0-9A-Fa-f]{32}$/.test(id)) problems.push('認証 ID は 32 桁の 16 進数（0〜9・A〜F）です（いま ' + id.length + ' 文字）')
+          if (pw && pw !== KEPT && !/^[0-9A-Za-z]{12}$/.test(pw)) problems.push('パスワードは 12 桁の英数字です（いま ' + pw.length + ' 文字）')
+          $('#wsuha-cred-warn').text(problems.join(' / ')).toggle(problems.length > 0)
+        }
+        $('#node-config-input-routeBId, #node-config-input-routeBPassword').on('input change', function () {
+          check()
+          credState(credServer)
+        })
+        check()
+        /** 欄に値があるか。保存済みの印のときは、Node-RED が値を持っていると言っているか（has_）を見る。消した欄は空なので未設定。 */
+        function credFilled(field, has) {
+          const v = String($('#node-config-input-' + field).val() || '').trim()
+          return v === KEPT ? !!has : !!v
+        }
+        /**
+         * 状態の 1 行。サーバーの状態が届かない（未デプロイ）ときは欄の値から。
+         * 架空の値はシミュレーターだけのものなので、接続先を実機にしたら「設定済み」とは言わず、欄の値で答える
+         * （欄が空のままデプロイすると「認証情報がありません」で止まる）。
+         */
+        function credState(cr) {
+          credServer = cr
+          const c = node.credentials || {}
+          const filled = credFilled('routeBId', c.has_routeBId) && credFilled('routeBPassword', c.has_routeBPassword)
+          const fake = !!cr && cr.source === SIMULATOR_SOURCE && $('#node-config-input-mode').val() !== 'simulator'
+          let text
+          if (cr && cr.envOverrides) text = '環境変数が優先されています（ここで入れても、いまは効きません）'
+          else if (cr && cr.stored) text = 'Web UI かフローで保存した値が効いています'
+          else if (cr && !fake) text = cr.configured ? '設定済み' : '未設定'
+          else text = filled ? '設定済み' : '未設定'
+          $('#wsuha-cred-state').text(text)
+          $('#wsuha-cred-state').attr('title', cr && cr.pairId && !fake ? 'PairID（認証 ID の下 8 桁）: ' + cr.pairId : '')
+        }
+        credState(null)
+
+        // --- 取得間隔（= n 分・範囲） -----------------------------------------------------------
+        function intervalHint() {
+          const v = String($('#node-config-input-pollInterval').val() || '').trim()
+          const r = R && R.pollIntervalSec
+          const sec = /^\d+$/.test(v) ? +v : r ? r.default : null
+          const min = sec !== null && sec >= 60 ? '= ' + Math.round((sec / 60) * 10) / 10 + ' 分。' : ''
+          $('#wsuha-interval-hint').text(min + (r ? r.min + '〜' + r.max + ' 秒（空なら ' + r.default + ' 秒）' : ''))
+        }
+        $('#node-config-input-pollInterval').on('input change', intervalHint)
+        intervalHint()
+        function tierHint(field, id) {
+          const r = R && R[field]
+          if (r) $(id).text(r.min + '〜' + r.max + ' 秒（空なら ' + r.default + ' 秒）')
+        }
+        tierHint('slowIntervalSec', '#wsuha-slow-range')
+        tierHint('halfHourIntervalSec', '#wsuha-half-range')
+        if (R && R.scanDurations) {
+          $('#wsuha-scan-range').text('（' + R.scanDurations.min + '〜' + R.scanDurations.max + ' の整数をカンマ区切り）')
+        }
+
+        // --- Web UI へのリンク ------------------------------------------------------------------
+        // 画面は httpNode（ダッシュボードの /ui/ と同じ側）にあるので、エディタの RED.settings.httpNodeRoot から作る（無ければ '/'）。
+        // 画面を載せたかどうかは、設定ノードの型の設定（wsuhaDeviceWebUi）で届く。
+        // エディタの httpNodeRoot は、サーバーが false でも '/' になるため、それだけでは分からない
+        // （settings.js の wsuhaBroute.ui: false も同じ）。届かない古いサーバーでは今までどおりリンクを出す
+        const webUi = RED.settings.wsuhaDeviceWebUi
+        let nodeRoot = RED.settings.httpNodeRoot
+        if (webUi && webUi.available === false) {
+          $('#wsuha-open-ui').hide()
+          $('#wsuha-open-ui-tip')
+            .text(
+              'このサーバーでは Web UI はありません（' + (webUi.reason || '理由は Node-RED のログにあります') + '）。' +
+                '同じことは、この編集画面とフローの入力（B ルートノードの settings・config）でできます。'
+            )
+            .show()
+        } else {
+          nodeRoot = typeof nodeRoot === 'string' && nodeRoot ? nodeRoot : '/'
+          if (nodeRoot.slice(-1) !== '/') nodeRoot += '/'
+          $('#wsuha-open-ui').attr('href', nodeRoot + 'wsuha-broute/ui/#/adapters/' + encodeURIComponent(node.id))
+        }
+
+        // --- 定期的に取りに行く値 -----------------------------------------------
+        // 表はサーバーから（registerType の settings: RED.settings.wsuhaDeviceEpcCatalog）。
+        // よく使う 4 つ（common）は基本設定にそのまま、ほかのまとまりと記号（EPC）の文字の欄は折りたたみ「ほかの値」の中。
+        // 文字の欄と行き来する: 文字の欄を書き換える → チェックを付け直す / チェックを変える → 文字の欄を書き直す（表に無い EPC は残す）
+        const catalog = RED.settings.wsuhaDeviceEpcCatalog
+        const maxEpcs = R && R.pollEpcs ? R.pollEpcs.max : 6
+        const epcBoxes = {}
+        const epcNotes = {}
+        const epcOrder = []
+        function epcCode(x) {
+          return String(x).trim().replace(/^0x/i, '').toUpperCase()
+        }
+        function parseEpcText(v) {
+          const out = []
+          String(v === undefined || v === null ? '' : v)
+            .split(/[\s,]+/)
+            .forEach(function (p) {
+              if (!p) return
+              const c = epcCode(p)
+              if (out.indexOf(c) < 0) out.push(c)
+            })
+          return out
+        }
+        function epcCount(list) {
+          const n = list.length
+          $('#wsuha-epc-count').text(n ? n + ' / ' + maxEpcs + ' 個' + (n > maxEpcs ? '（' + maxEpcs + ' 個までです）' : '') : '何も選んでいません（空なら瞬時電力 E7 を取ります）')
+          const more = list.filter(function (c) {
+            return !epcBoxes[c] || epcBoxes[c].attr('data-group') !== 'common'
+          }).length
+          $('#wsuha-epc-more-count').text(more ? '（' + more + ' 個を選んでいます）' : '')
+          // 記号の欄は畳んだ中にあるので、赤枠だけでは気づけない。読めない値と履歴は理由を文で出す
+          const bulky = R && R.pollEpcs && R.pollEpcs.bulky ? R.pollEpcs.bulky : []
+          const bad = list.some(function (c) {
+            return !/^[0-9A-F]{2}$/.test(c) || bulky.indexOf(c) >= 0
+          })
+          $('#wsuha-epc-error')
+            .text(bad ? (bulky.length ? '読めない値か、履歴（' + bulky.join('・') + '）' : '読めない値') + 'が入っています。「ほかの値」を開いて、記号（EPC）の欄を直してください。' : '')
+            .toggle(bad)
+        }
+        function syncChecks() {
+          const list = parseEpcText($('#node-config-input-pollEpcs').val())
+          epcOrder.forEach(function (c) {
+            epcBoxes[c].prop('checked', list.indexOf(c) >= 0)
+          })
+          epcCount(list)
+        }
+        function syncText() {
+          const now = parseEpcText($('#node-config-input-pollEpcs').val())
+          const checked = epcOrder.filter(function (c) {
+            return !!epcBoxes[c].prop('checked')
+          })
+          // 今の並びを保ち、外したものを抜き、新しく付けたものを後ろに足す。表に無い EPC（手で書いたもの）は残す
+          const keep = now.filter(function (c) {
+            return checked.indexOf(c) >= 0 || !epcBoxes[c]
+          })
+          checked.forEach(function (c) {
+            if (keep.indexOf(c) < 0) keep.push(c)
+          })
+          $('#node-config-input-pollEpcs').val(keep.join(', '))
+          epcCount(keep)
+        }
+        function epcRow(it) {
+          const c = epcCode(it.epc)
+          const cb = $('<input>')
+            .attr('type', 'checkbox')
+            .attr('data-epc', c)
+            .attr('data-group', it.group)
+            .attr('style', 'width:auto;margin:0 6px 0 0;vertical-align:middle')
+          cb.on('change', syncText)
+          const note = $('<span>').attr('class', 'wsuha-epc-note')
+          const row = $('<label>').attr('class', 'wsuha-epc-item').attr('style', 'display:block;width:auto;margin:2px 0;font-weight:normal')
+          row.append(cb)
+          row.append($('<b>').text(it.label || it.name))
+          row.append($('<span>').text(' — ' + (it.desc || '') + '（' + c + '）'))
+          row.append(note)
+          epcBoxes[c] = cb
+          epcNotes[c] = note
+          epcOrder.push(c)
+          return row
+        }
+        if (catalog && Array.isArray(catalog.items) && catalog.items.length) {
+          const common = $('#wsuha-epc-common').empty()
+          const box = $('#wsuha-epc-list').empty()
+          ;(catalog.groups || []).forEach(function (g) {
+            const items = catalog.items.filter(function (it) {
+              return it.group === g.id
+            })
+            if (!items.length) return
+            if (g.id === 'common') {
+              items.forEach(function (it) {
+                common.append(epcRow(it))
+              })
+              return
+            }
+            box.append($('<div>').attr('class', 'wsuha-epc-group').text(g.label))
+            items.forEach(function (it) {
+              box.append(epcRow(it))
+            })
+          })
+          $('#node-config-input-pollEpcs').on('input change', syncChecks)
+          syncChecks()
+        } else {
+          $('#wsuha-epc-common').hide()
+          $('#wsuha-epc-list').hide()
+          epcCount(parseEpcText($('#node-config-input-pollEpcs').val()))
+        }
+        // 折りたたみ「ほかの値」。既定は閉じる。誤りがある値は記号の欄で直すので、そのときは開いて見せる
+        const epcInvalid = !wsuhaEpcList($('#node-config-input-pollEpcs').val())
+        $('#wsuha-epc-more').toggle(epcInvalid)
+        $('#wsuha-epc-more-icon').attr('class', epcInvalid ? 'fa fa-angle-down' : 'fa fa-angle-right')
+        $('#wsuha-epc-more-toggle').on('click', function (e) {
+          if (e && e.preventDefault) e.preventDefault()
+          const open = $('#wsuha-epc-more-icon').attr('class') === 'fa fa-angle-down'
+          $('#wsuha-epc-more').toggle(!open)
+          $('#wsuha-epc-more-icon').attr('class', open ? 'fa fa-angle-right' : 'fa fa-angle-down')
+        })
+        // メーターが持っていない値（0x9F に無い）は、運用設定の読み出し（options の supported）が届いたら印を付ける
+        function markSupported(options) {
+          ;(options || []).forEach(function (o) {
+            const c = epcCode(o.epc)
+            if (epcNotes[c]) epcNotes[c].text(o.supported === false ? ' ・このメーターは持っていません' : '')
+          })
+        }
+
+        // --- 画面かフローで変えた構成が効いている項目に、その値と注意を出す ---------------
+        const CFG_FIELDS = ['name', 'enabled', 'role', 'mode', 'serialport', 'serialbaud', 'deviceKey', 'expectedMac', 'autoStart', 'scanDurations']
+        function cfgValueText(k, v) {
+          if (v === null || v === undefined) return '（未設定）'
+          if (v === '') return '（空）'
+          if (k === 'enabled' || k === 'autoStart') return v ? 'オン' : 'オフ'
+          if (k === 'mode') return v === 'simulator' ? 'シミュレーター（実機なしで試す）' : 'Wi-SUN アダプタ（実機）'
+          if (Array.isArray(v)) return v.join(', ')
+          return String(v)
+        }
+        function whenText(at) {
+          return at ? '・' + new Date(at).toLocaleString() : ''
+        }
+        function byText(by) {
+          if (by === 'web-ui') return 'Web UI'
+          if (by === 'editor') return 'エディタ'
+          if (typeof by === 'string' && by.indexOf('flow:') === 0) return 'フロー（' + by.slice(5) + '）'
+          return by ? String(by) : '不明'
+        }
+        $.getJSON('wsuha-broute/device/' + encodeURIComponent(node.id) + '/config', function (c) {
+          CFG_FIELDS.forEach(function (k) {
+            const f = c && c.fields ? c.fields[k] : null
+            const box = $('#wsuha-cfg-' + k).empty().hide()
+            markNote(k, false)
+            if (!f) return
+            if (f.source === 'runtime') {
+              box.append($('<b>').text('Web UI かフローで変えた値が効いています: ' + cfgValueText(k, f.value)))
+              box.append($('<span>').text('（' + byText(f.by) + whenText(f.at) + '）'))
+              box.append($('<br>'))
+              box.append($('<span>').text('ここで値を変えてデプロイすると、この項目の Web UI かフローの値は外れます。'))
+              box.show()
+              markNote(k, true)
+              if (k === 'enabled' && f.value === false) runtimeDisabled = true
+            } else if (f.by === 'editor') {
+              box.append(
+                $('<span>').text(
+                  'ここで値を変えてデプロイしたため、Web UI かフローで変えた値を外しました（' + byText(f.by) + whenText(f.at) + '）。' +
+                    'いまはこの設定ノードの値が効いています。'
+                )
+              )
+              box.show()
+              markNote(k, true)
+            }
+          })
+          syncEnabledBand()
+          const cr = c && c.credentials ? c.credentials : null
+          credState(cr)
+          const cbox = $('#wsuha-cfg-credentials').empty().hide()
+          markNote('credentials', false)
+          if (cr && cr.envOverrides) {
+            cbox.append($('<b>').text('環境変数が優先されています（値は出しません）。ここと Web UI で入れた値は効きません。'))
+            cbox.show()
+            markNote('credentials', true)
+          } else if (cr && cr.stored) {
+            cbox.append($('<b>').text('Web UI かフローで保存した値が効いています（値は出しません）'))
+            cbox.append($('<span>').text('（' + byText(cr.stored.by) + whenText(cr.stored.at) + '）'))
+            cbox.append($('<br>'))
+            // Web UI とエディタのどちらからでも入れられるので、後から入れた方が効く。
+            // 比べるのは値の指紋なので、今と同じ値の入れ直しでは外れない。空か片方だけのデプロイも外さない（片方だけの値は使えない）
+            cbox.append(
+              $('<span>').text(
+                'ここで別の値を入れてデプロイすると、こちらが効きます（Web UI かフローの値は外れます。後から入れた方が効きます）。' +
+                  '今と同じ値を入れ直しても変わりません。ここを空か片方だけにしてデプロイしても外れません。' +
+                  'この編集画面の値に戻すには、Web UI の「画面で入れた値を消す…」か、フローの入力 credentials-reset を使います。'
+              )
+            )
+            cbox.show()
+            markNote('credentials', true)
+          }
+        }).fail(function () {
+          // まだデプロイしていない設定ノード（404）: Web UI のリンクは開けないので隠す
+          if (!(webUi && webUi.available === false)) {
+            $('#wsuha-open-ui').hide()
+            $('#wsuha-open-ui-tip').text('デプロイすると開けます').show()
+          }
+        })
+
+        // 運用設定（画面やフローで保存した値）が効いている項目に、その値と注意を出す。
+        // まだデプロイしていない設定ノードは 404 なので、何も出さない
+        const RT_FIELDS = ['pollIntervalSec', 'pollEpcs', 'slowIntervalSec', 'halfHourIntervalSec']
+        function valueText(v, unit) {
+          if (Array.isArray(v)) {
+            return v
+              .map(function (x) {
+                return String(x).replace(/^0x/i, '')
+              })
+              .join(', ')
+          }
+          return String(v) + (unit ? ' ' + unit : '')
+        }
+        function hasValue(v) {
+          return v !== null && v !== undefined
+        }
+        // 運用設定の値・変えた人・時刻と、エディタで変えたときの注意
+        function appendRuntime(box, label, value, f) {
+          box.append($('<b>').text(label + valueText(value, f.unit)))
+          box.append($('<span>').text('（' + byText(f.by) + whenText(f.at) + '）'))
+          box.append($('<br>'))
+          box.append($('<span>').text('ここで値を変えてデプロイすると、この項目の運用設定は外れます。'))
+        }
+        $.getJSON('wsuha-broute/device/' + encodeURIComponent(node.id) + '/settings', function (s) {
+          if (s && s.fields && s.fields.pollEpcs) markSupported(s.fields.pollEpcs.options)
+          RT_FIELDS.forEach(function (k) {
+            const f = s && s.fields ? s.fields[k] : null
+            const box = $('#wsuha-rt-' + k).empty().hide()
+            markNote(k, false)
+            if (!f) return
+            if (f.source === 'runtime') {
+              appendRuntime(box, '運用設定が効いています: ', f.value, f)
+              box.show()
+              markNote(k, true)
+            } else if (f.source === 'override') {
+              box.append(
+                $('<span>').text(
+                  '一時的な上書き（フローの入力）が効いています: ' + valueText(f.value, f.unit) +
+                    '。auto を送る（Web UI の「自動運転に戻す」も同じ）か、Node-RED を再起動すると外れます。' +
+                    'デプロイ（この設定ノードを変えたときを含む）では外れません。'
+                )
+              )
+              // 上書きの下に運用設定もあれば（runtimeValue）、その値と、エディタで変えると外れることを出す
+              if (hasValue(f.runtimeValue)) {
+                box.append($('<br>'))
+                appendRuntime(box, '上書きの下の運用設定（上書きが外れると効きます）: ', f.runtimeValue, f)
+              }
+              box.show()
+              markNote(k, true)
+            } else if (f.by === 'editor') {
+              // ここで値を変えてデプロイしたため、運用設定を外した項目（変えた人「エディタ」と外した時刻）
+              box.append(
+                $('<span>').text(
+                  'ここで値を変えてデプロイしたため、この項目の運用設定を外しました（' + byText(f.by) + whenText(f.at) + '）。' +
+                    'いまはこの設定ノードの値が効いています。'
+                )
+              )
+              box.show()
+              markNote(k, true)
+            }
+          })
+        })
+        markAdvanced()
+      },
+      oneditsave: function () {
+        // 契約の select の値を、保存する文字の欄に入れる（その他は入力した文字。空のままなら未設定）
+        const v = $('#wsuha-role-select').val()
+        if (v !== ROLE_OTHER) $('#node-config-input-role').val(v || '')
+        else $('#node-config-input-role').val(String($('#node-config-input-role').val() || '').trim())
+        editing = null
+      },
+      oneditcancel: function () {
+        editing = null
+      },
+      oneditdelete: function () {
+        editing = null
+      },
+    })
+  })()
+</script>
+
+<script type="text/html" data-template-name="wsuha-device">
+  <style>
+    .wsuha-dev .form-row > label { width: 120px; }
+    .wsuha-dev .form-row > input[type='text'],
+    .wsuha-dev .form-row > input[type='password'],
+    .wsuha-dev .form-row > select { width: calc(100% - 130px); }
+    .wsuha-dev .form-row > input.wsuha-short { width: 90px; }
+    .wsuha-dev .form-tips { margin-top: 4px; }
+    .wsuha-dev .wsuha-indent { margin-left: 124px; }
+    .wsuha-dev .wsuha-band { padding: 6px 8px; margin-bottom: 10px; border: 1px solid #d9822b; border-radius: 4px; }
+    .wsuha-dev .wsuha-warn { color: #b71c1c; }
+  </style>
+  <div class="wsuha-dev">
+    <div class="form-row">
+      <label for="node-config-input-name"><i class="fa fa-tag"></i> 名前</label>
+      <input type="text" id="node-config-input-name" placeholder="例: 1 階の分電盤（空なら「電力（USB0）」のように出します）" />
+      <div class="form-tips wsuha-cfg wsuha-indent" id="wsuha-cfg-name" style="display:none"></div>
+    </div>
+
+    <div class="form-row">
+      <ul id="wsuha-device-tabs"></ul>
+    </div>
+
+    <div id="wsuha-device-tabs-content" style="min-height:150px">
+      <!-- 基本設定（tier が basic のもの） -->
+      <div id="wsuha-device-tab-basic">
+        <div class="form-tips wsuha-band" id="wsuha-footer-disabled" style="display:none">
+          <i class="fa fa-exclamation-triangle"></i>
+          下の帯の「無効」（Node-RED の設定ノードの切り替え）になっています。このままでは、この台は動かず Web UI にも出ません。止めるなら、詳細設定の「有効」を外してください。
+        </div>
+        <div class="form-tips wsuha-band" id="wsuha-disabled-band" style="display:none">
+          <i class="fa fa-power-off"></i> この台は無効です（ポートを開きません）。
+          <a href="#" id="wsuha-enable-now" class="red-ui-button red-ui-button-small">有効にする</a>
+          <span id="wsuha-disabled-runtime" style="display:none">Web UI かフローで無効にしています。Web UI の設定タブか、フローの入力 config で有効にします。</span>
+        </div>
+
+        <div class="form-row">
+          <label for="wsuha-role-select"><i class="fa fa-bolt"></i> 契約</label>
+          <select id="wsuha-role-select">
+            <option value="">未設定</option>
+            <option value="電力">電力</option>
+            <option value="動力">動力</option>
+            <option value="_other">その他（名前を入力）</option>
+          </select>
+          <div class="wsuha-indent" id="wsuha-role-other" style="display:none;margin-top:4px">
+            <input type="text" id="node-config-input-role" style="width:calc(100% - 10px)" placeholder="契約の名前" />
+          </div>
+          <div class="form-tips wsuha-warn wsuha-indent" id="wsuha-role-error" style="display:none"></div>
+          <div class="form-tips wsuha-indent">
+            一覧と見出しのバッジに出します。どのメーターにつながるかは、認証 ID で決まります。一般に、電力は電灯の契約（照明・コンセント）、動力は低圧電力の契約（三相の機器）です。フローの出力の device にも入ります。
+          </div>
+          <div class="form-tips wsuha-cfg wsuha-indent" id="wsuha-cfg-role" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label for="node-config-input-mode"><i class="fa fa-plug"></i> 接続先</label>
+          <select id="node-config-input-mode">
+            <option value="serial">Wi-SUN アダプタ（実機）</option>
+            <option value="simulator">シミュレーター（実機なしで試す）</option>
+          </select>
+          <div class="form-tips wsuha-cfg wsuha-indent" id="wsuha-cfg-mode" style="display:none"></div>
+        </div>
+
+        <div class="form-row wsuha-serial-only">
+          <label for="node-config-input-serialport"><i class="fa fa-random"></i> ポート</label>
+          <input type="text" id="node-config-input-serialport" style="width:calc(100% - 170px)" placeholder="/dev/serial/by-id/… または COM3" />
+          <a href="#" id="wsuha-port-lookup" class="red-ui-button" title="ポートの候補を全部出す"><i class="fa fa-search"></i></a>
+          <div class="form-tips wsuha-indent" id="wsuha-port-hint"></div>
+          <div class="form-tips wsuha-warn wsuha-indent" id="wsuha-port-warn" style="display:none"></div>
+          <div class="form-tips wsuha-cfg wsuha-indent" id="wsuha-cfg-serialport" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label><i class="fa fa-id-card-o"></i> 認証</label>
+          <span id="wsuha-cred-state">未設定</span>
+          <div class="form-tips wsuha-indent">電力会社（一般送配電事業者）に B ルートサービスを申し込むと届きます。メーター（契約）ごとに別の ID です。</div>
+          <div class="form-tips wsuha-indent wsuha-sim-only">シミュレーターでは、入れなくても架空の値で動きます。</div>
+        </div>
+        <div class="form-row">
+          <label for="node-config-input-routeBId"><i class="fa fa-id-card-o"></i> 認証 ID</label>
+          <input type="password" id="node-config-input-routeBId" placeholder="32 桁の 16 進数（0〜9・A〜F）" autocomplete="new-password" />
+        </div>
+        <div class="form-row">
+          <label for="node-config-input-routeBPassword"><i class="fa fa-key"></i> パスワード</label>
+          <input type="password" id="node-config-input-routeBPassword" placeholder="12 桁の英数字" autocomplete="new-password" />
+          <div class="form-tips wsuha-warn wsuha-indent" id="wsuha-cred-warn" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label for="node-config-input-pollInterval"><i class="fa fa-clock-o"></i> 取得間隔</label>
+          <input type="text" id="node-config-input-pollInterval" class="wsuha-short" /> 秒
+          <span class="form-tips" id="wsuha-interval-hint" style="margin-left:8px"></span>
+          <div class="form-tips wsuha-rt wsuha-indent" id="wsuha-rt-pollIntervalSec" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label><i class="fa fa-list"></i> 取りに行く値</label>
+          <span>定期的に取りに行く値: <span id="wsuha-epc-count"></span></span>
+          <div id="wsuha-epc-common" class="wsuha-indent" style="font-size:12px;margin-top:4px"></div>
+          <div class="form-tips wsuha-warn wsuha-indent" id="wsuha-epc-error" style="display:none"></div>
+          <div class="wsuha-indent" style="margin-top:4px">
+            <a href="#" id="wsuha-epc-more-toggle"><i id="wsuha-epc-more-icon" class="fa fa-angle-right"></i> ほかの値（定時の積算・メーターの情報など）<span id="wsuha-epc-more-count"></span></a>
+          </div>
+          <div id="wsuha-epc-more" class="wsuha-indent" style="display:none">
+            <div id="wsuha-epc-list" class="wsuha-epc-list" style="max-height:260px;overflow-y:auto;font-size:12px"></div>
+            <div style="margin-top:6px">
+              記号（EPC）で書く:
+              <input type="text" id="node-config-input-pollEpcs" style="width:60%" placeholder="E7, E8" />
+            </div>
+          </div>
+          <div class="form-tips wsuha-rt wsuha-indent" id="wsuha-rt-pollEpcs" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label><i class="fa fa-external-link"></i> Web UI</label>
+          <a id="wsuha-open-ui" href="/wsuha-broute/ui/" target="_blank" rel="noopener noreferrer">Web UI で開く</a>
+          <span class="form-tips" id="wsuha-open-ui-tip" style="margin-left:8px;display:none"></span>
+        </div>
+      </div>
+
+      <!-- 詳細設定（tier が advanced のものと、エディタだけの項目） -->
+      <div id="wsuha-device-tab-advanced" style="display:none">
+        <div class="form-row">
+          <label for="node-config-input-enabled"><i class="fa fa-power-off"></i> 有効</label>
+          <input type="checkbox" id="node-config-input-enabled" style="width:auto;vertical-align:top" />
+          この台で計測する（外すと、デプロイしてもポートを開きません）
+          <div class="form-tips wsuha-cfg wsuha-indent" id="wsuha-cfg-enabled" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label for="node-config-input-autoStart"><i class="fa fa-play"></i> 自動で始める</label>
+          <input type="checkbox" id="node-config-input-autoStart" style="width:auto;vertical-align:top" />
+          デプロイしたら、メーターへの接続を自動で始める
+          <div class="form-tips wsuha-cfg wsuha-indent" id="wsuha-cfg-autoStart" style="display:none"></div>
+        </div>
+
+        <div class="form-row wsuha-serial-only">
+          <label for="node-config-input-serialbaud"><i class="fa fa-tachometer"></i> 通信速度</label>
+          <select id="node-config-input-serialbaud"></select>
+          <div class="form-tips wsuha-cfg wsuha-indent" id="wsuha-cfg-serialbaud" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label for="node-config-input-deviceKey"><i class="fa fa-hashtag"></i> デバイスキー</label>
+          <input type="text" id="node-config-input-deviceKey" />
+          <div class="form-tips wsuha-indent">環境変数と移行用の秘密ファイルの名前に使います。1 台なら空でかまいません。</div>
+          <div class="form-tips wsuha-cfg wsuha-indent" id="wsuha-cfg-deviceKey" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label for="node-config-input-expectedMac"><i class="fa fa-barcode"></i> 想定 MAC</label>
+          <input type="text" id="node-config-input-expectedMac" />
+          <div class="form-tips wsuha-indent">入れると、起動時にアダプタの MAC（16 桁の 16 進数）を照合し、別の個体ならエラーで知らせます。</div>
+          <div class="form-tips wsuha-cfg wsuha-indent" id="wsuha-cfg-expectedMac" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label for="node-config-input-scanDurations"><i class="fa fa-search"></i> スキャンの段階</label>
+          <input type="text" id="node-config-input-scanDurations" />
+          <div class="form-tips wsuha-indent">メーターが見つからないとき、順に長く探します<span id="wsuha-scan-range"></span>。</div>
+          <div class="form-tips wsuha-cfg wsuha-indent" id="wsuha-cfg-scanDurations" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label for="node-config-input-slowIntervalSec"><i class="fa fa-hourglass-half"></i> 積算の取得間隔</label>
+          <input type="text" id="node-config-input-slowIntervalSec" class="wsuha-short" /> 秒
+          <span class="form-tips" id="wsuha-slow-range" style="margin-left:8px"></span>
+          <div class="form-tips wsuha-indent">積算電力量（買電・売電）・動作状態・異常発生状態を取りに行く間隔</div>
+          <div class="form-tips wsuha-rt wsuha-indent" id="wsuha-rt-slowIntervalSec" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label for="node-config-input-halfHourIntervalSec"><i class="fa fa-hourglass"></i> 定時積算の取得間隔</label>
+          <input type="text" id="node-config-input-halfHourIntervalSec" class="wsuha-short" /> 秒
+          <span class="form-tips" id="wsuha-half-range" style="margin-left:8px"></span>
+          <div class="form-tips wsuha-indent">30 分ごとに確定する積算を取りに行く間隔</div>
+          <div class="form-tips wsuha-rt wsuha-indent" id="wsuha-rt-halfHourIntervalSec" style="display:none"></div>
+        </div>
+
+        <div class="form-row">
+          <label for="node-config-input-autoWriteWopt"><i class="fa fa-cogs"></i> 受信の形式</label>
+          <input type="checkbox" id="node-config-input-autoWriteWopt" style="width:auto;vertical-align:top" />
+          受信の形式を自動で合わせる
+          <div class="form-tips wsuha-indent">必要なときだけ 1 回、アダプタの内部 FLASH に WOPT 01 を書き込みます。</div>
+        </div>
+
+        <div class="form-row wsuha-sim-only">
+          <label for="node-config-input-simulatorOptions"><i class="fa fa-cogs"></i> 模擬設定</label>
+          <input type="text" id="node-config-input-simulatorOptions" placeholder='{"meter":{"power":1200}}' />
+          <div class="form-tips wsuha-indent">シミュレーターの動きを JSON で変えます（空なら既定。瞬時電力 436 W）。</div>
+        </div>
+
+        <div class="form-row">
+          <label><i class="fa fa-id-card-o"></i> 認証の出どころ</label>
+          <span>Web UI かフローで保存した値と、ここで入れた値は、後から入れた方が効きます（同じ値の入れ直しと、空か片方だけのデプロイでは外れません）。</span>
+          <div class="form-tips wsuha-cfg wsuha-indent" id="wsuha-cfg-credentials" style="display:none"></div>
+        </div>
+
+        <div class="form-tips">同じことは、Web UI の設定タブとフローの入力（settings・config・credentials）でもできます。</div>
+      </div>
+    </div>
+  </div>
+</script>
+
+<script type="text/html" data-help-name="wsuha-device">
+  <p>Wi-SUN アダプタを 1 台表します（確かめたのは RATOC RS-WSUHA だけです。型の名前は <code>wsuha-device</code>）。</p>
+
+  <h3>はじめに</h3>
+  <ol>
+    <li>B ルートノードを置き、編集画面の「アダプタ」の右のボタン（Node-RED 3 は鉛筆、4 は ＋）を押して Wi-SUN アダプタを追加します
+      （Node-RED 3 で別のアダプタが選んであるときは、先に「新規に Wi-SUN アダプタ を追加...」を選びます）。</li>
+    <li>基本設定のタブで、契約・ポート・B ルートの認証 ID とパスワードを入れます。</li>
+    <li>デプロイすると、取得間隔（既定 30 秒）ごとに瞬時電力が B ルートノードの出力 1 に出ます。</li>
+  </ol>
+
+  <h3>このノードがすること</h3>
+  <ul>
+    <li>ポート（実機の Wi-SUN アダプタ）を 1 つだけ開き、複数の B ルートノードで共有します。
+      ポートは同時に 1 つのプロセスしか開けないため、ここで共有します。</li>
+    <li><b>有効</b>（既定）なら、使っているノードの数に関係なくポートを開きます。
+      閉じるのは、この設定ノードを変更・削除してデプロイしたとき、デプロイの種類が「全て」（既定）のとき、Node-RED を止めたときです。
+      デプロイの種類を「変更したノード」か「変更したフロー」にすると、B ルートノードだけの再デプロイではメーターとの接続は切れません。
+      「全て」のデプロイでは、つなぎ直すまで 1 分前後止まります。
+      Node-RED 3.1.3 は、この編集画面を開いたあとのデプロイでは、値を変えていなくても設定ノードを作り直します。
+      使っているノードが無いまま有効にしていると、デプロイのあとに Node-RED のログへ警告を 1 回だけ出します
+      （予備のアダプタなら「有効」を外してください）。</li>
+    <li>Node-RED の設定ノードの下の帯にも「有効 / 無効」の切り替えがあります。帯で無効にすると、この設定ノードそのものが作られず、
+      B ルートノードは「アダプタが無効か、見つかりません」になり、Web UI にも出ません。止めるときは、詳細設定の「有効」を外してください。</li>
+    <li>Web UI（<code>{httpNodeRoot}wsuha-broute/ui/</code>。ダッシュボードの <code>/ui/</code> と同じ側）で
+      状態・計測値・ログを見て、操作と設定の変更ができます。</li>
+    <li>B ルートの認証 ID とパスワードを持ちます。Node-RED が暗号化して <code>flows_cred.json</code> に保存し、
+      書き出したフロー JSON には含まれません。</li>
+    <li>接続の手順（ポート → 初期化 → メーターを探す → 認証 → 確認 → 接続済み）と、定期的な取得を回します。</li>
+  </ul>
+
+  <h3>基本設定と詳細設定</h3>
+  <p>名前はタブの上にあります。動かすのに要るもの（契約・接続先・ポート・認証 ID とパスワード・取得間隔・定期的に取りに行く値）は「基本設定」に、
+     ふつうは変えなくてよいもの（有効・自動で始める・通信速度・デバイスキー・想定 MAC・スキャンの段階・積算と定時積算の取得間隔）は「詳細設定」にあります。
+     Web UI の設定タブも同じ割り振りです。詳細設定に、Web UI かフローで変えた値の注記や入力の誤りがあると、タブの名前が「詳細設定（n 件の注意）」になります。</p>
+
+  <h3>契約</h3>
+  <p>「電力」「動力」「その他（名前を入力）」から選びます。一覧と見出しのバッジと、フローの出力の <code>device</code> に入ります。
+     <b>どの契約（メーター）につながるかを決めるのは、ポートではなく認証 ID です。</b>
+     <code>SKSETRBID</code> が認証 ID の下 8 桁を PairID として設定し、メーターを探すときはそれに一致するメーターしか見つけません。
+     ポートを差し替えても、同じ認証 ID なら同じ契約につながります。</p>
+
+  <h3>ポート</h3>
+  <p>🔍 を押すと、つながっている USB シリアル機器の候補を全部出します（Wi-SUN アダプタらしいものを先に）。
+     ほかの台やフローが使っているポートには「（…が使っています）」と添えます。<code>/dev/ttyUSB*</code> の番号は抜き差しで入れ替わるので、
+     <code>/dev/serial/by-id/…</code> を選んでください。Wi-SUN アダプタではない機器を選ぶと注意を出します。</p>
+
+  <h3>定期的に取りに行く値・取得間隔（運用設定）</h3>
+  <p>よく使う 4 つ（瞬時電力・瞬時電流・積算電力量の買電と売電）は基本設定にそのまま並びます。ほかの値は折りたたみの「ほかの値」の中にあり、
+     記号（EPC）を 16 進でカンマ区切りに書くこともできます（どちらからでも同じ欄になります）。1〜6 個（空なら瞬時電力 <code>E7</code>）。
+     履歴の <code>E2</code>・<code>E4</code>・<code>EC</code> は指定できません。
+     メーターが持っていない値（Get プロパティマップ 0x9F に無いもの）には「このメーターは持っていません」と出します。</p>
+  <p>積算の取得間隔（空なら 300 秒）は、積算電力量の買電（<code>E0</code>）と売電（<code>E3</code>）・
+     異常発生状態（<code>88</code>）・動作状態（<code>80</code>）を取りに行く間隔です。定時積算の取得間隔（空なら 1800 秒）は、
+     定時積算の買電（<code>EA</code>）と売電（<code>EB</code>）を取りに行く間隔です。
+     定時積算はメーターが自分から知らせてくるので、取りこぼしたときのための取得です。</p>
+  <p>この 4 項目は、デプロイせずに変えられます（運用設定）。変える場所は 3 つあり、どれから変えても同じ
+     <code>&lt;userDir&gt;/wsuha-broute/settings.json</code> に残り、ほかの 2 つに映ります。</p>
+  <ul>
+    <li>Web UI の設定タブ</li>
+    <li>フローの入力: B ルートノードに <code>topic</code> = <code>settings</code> を送る
+      （変えた人は <code>flow:&lt;ノードの名前&gt;</code> と記録されます）</li>
+    <li>この編集画面: 値を変えてデプロイすると、<b>その項目の運用設定は外れ</b>、編集画面の値が効きます。
+      編集画面を開くと、運用設定が効いている項目の下にその値と変えた経路・時刻を出します
+      （一時的な上書きが掛かっていて、その下に運用設定がある項目にも出します）。
+      ここで値を変えて運用設定が外れた項目には、変えた経路「エディタ」と外した時刻を出します
+      （Web UI の設定タブとフローの <code>get-settings</code> も同じ）</li>
+  </ul>
+  <p>一時的な上書き（B ルートノードの入力の <code>stop</code>・<code>terminate</code>・<code>interval</code>・<code>epcs</code> と、
+     Web UI の「停止」）は、<b>デプロイでは外れません</b>（この設定ノードの値を変えたとき・「有効」を入れ直したときも）。
+     点検のために止めた台が、関係の無い変更のデプロイで動き出さないためです。外れるのは <code>start</code> / <code>auto</code>
+     （Web UI の「開始」「自動運転に戻す」）・Node-RED の再起動・この設定ノードの削除のときです。</p>
+  <p>運用設定が変わると、この設定ノードを使っている B ルートノードの出力 2 に
+     <code>settings</code> が 1 通ずつ出ます（<code>msg.changedBy</code> に変えた経路）。</p>
+
+  <h3>アダプタと接続の設定、B ルートの認証 ID とパスワード</h3>
+  <p>名前・有効・契約・接続先・ポート・通信速度・デバイスキー・想定 MAC・自動で始める・スキャンの段階と、
+     B ルートの認証 ID とパスワードは、デプロイせずに変えられます。変える場所は 3 つあり、どれから変えても同じ設定ノードに効き、ほかの 2 つに映ります。</p>
+  <ul>
+    <li>Web UI の設定タブ（「アダプタと接続」「B ルートの認証 ID とパスワード」のカード。ポートはつながっている候補から選べます）</li>
+    <li>フローの入力: B ルートノードに <code>topic</code> = <code>config</code>（アダプタと接続）/ <code>credentials</code>（認証情報）を送る
+      （変えた人は <code>flow:&lt;ノードの名前&gt;</code> と記録されます）。<code>get-config</code> で今の値、<code>serialports</code> でポートの候補を読めます</li>
+    <li>この編集画面: 値を変えてデプロイすると、<b>その項目の Web UI かフローの値は外れ</b>、編集画面の値が効きます。
+      編集画面を開くと、Web UI かフローで変えた値が効いている項目の下に、その値と変えた経路・時刻を出します</li>
+  </ul>
+  <p>アダプタと接続の設定は <code>&lt;userDir&gt;/wsuha-broute/settings.json</code> に、Web UI かフローで保存した認証情報は
+     <code>&lt;userDir&gt;/wsuha-broute/credentials/&lt;設定ノードの id&gt;.json</code>（ディレクトリ 700・ファイル 600）に残ります。
+     認証情報の値は Web UI・API・ログ・出力のどこにも出しません（出すのは「設定済み」・出どころ・PairID だけ）。</p>
+  <p><b>接続し直す項目</b>: 接続先・ポート・通信速度・デバイスキー・想定 MAC・認証情報を変えると、<b>この台だけ</b>
+     セッションを終了してポートを閉じ、新しい値で開き直します（30〜90 秒止まります。ほかの台とフローはそのままです。
+     一時的な上書き（停止など）は引き継ぎます）。名前・契約・自動で始める・スキャンの段階は開き直さずに効きます。
+     「有効」を外すとポートを閉じ、入れると開きます。開き直しの最中に次の変更を送ると、終わるまで <code>BUSY</code> で断ります。
+     ほかの台やフローのノードが使っているポートは選べません（<code>PORT_IN_USE</code>）。</p>
+  <p>Web UI から変えられないようにするなら、settings.js に <code>wsuhaBroute: { uiConfig: false }</code>
+     と書きます（Web UI の書き込みだけが <code>CONFIG_LOCKED</code> になります。フローの入力と編集画面からは変えられます）。
+     Web UI からのアダプタの追加を止めるなら <code>wsuhaBroute: { uiAddAdapter: false }</code> と書きます。
+     アダプタを消すのは、この編集画面（とエディタのタブ）だけです。</p>
+
+  <h3>Web UI のセキュリティ</h3>
+  <p>Web UI に独自のログインはありません。同じネットワークから Node-RED（既定は 1880 番）に届く人は誰でも見られます
+     （ダッシュボードと同じ）。B ルートの認証 ID とパスワードはどこにも出しません。</p>
+  <p><b>Node-RED に認証（<code>adminAuth</code>）があるサーバーでは、変更にはエディタのログインが要ります。</b>
+     同じブラウザーでエディタにログインすると、Web UI から変更できるようになります。
+     権限は <code>*</code>・<code>write</code>・<code>wsuha-broute.write</code> のどれかが要ります（<code>read</code> だけのユーザーは変更できません）。
+     見るだけならログインは要りません。<code>adminAuth</code> が無いサーバーでは、Node-RED に届く人は誰でも変更できます。</p>
+  <p>ただし、エディタを <code>adminAuth</code> 以外の方法で閉じたサーバー（<code>httpNodeRoot</code> が <code>httpAdminRoot</code> の下に無い <code>httpAdminAuth</code>・<code>httpAdminMiddleware</code> と、<code>httpAdminRoot: false</code>）では、
+     ログインした人を確かめられないので、Web UI からの変更を全部断ります。
+     開くなら、settings.js に <code>httpNodeAuth</code> か <code>wsuhaBroute: { allowAnonymousWrites: true }</code> を書いてください。
+     Node-RED を <code>RED.init</code> で自分のアプリに埋め込んでいるサーバーには <code>httpNodeAuth</code> が掛からないので、開くのは <code>allowAnonymousWrites</code> だけです（守りはホストのアプリで掛けてください）。
+     <code>disableEditor: true</code> はエディタを出さないだけで管理 API は開いたままなので、この扱いにはなりません。守るなら <code>adminAuth</code> を書いてください。</p>
+  <ul>
+    <li>別のサイトからの操作は断ります（書き込みは <code>Content-Type: application/json</code> が必須で、
+      <code>Origin</code> が Node-RED のアドレスと違えば 403 <code>BAD_ORIGIN</code>）。</li>
+    <li>別のサイトのページからは読めません（応答に <code>Access-Control-Allow-Origin</code> を付けません。
+      エディタが付けるものも外します）。</li>
+    <li>開けるアドレスは、IP アドレス・<code>localhost</code>・1 語の名前（<code>raspberrypi</code> など）・
+      <code>.local</code> / <code>.lan</code> / <code>.home.arpa</code> / <code>.internal</code> の名前・このサーバーのホスト名です
+      （DNS リバインディングの対策。ほかの名前は 403 <code>BAD_HOST</code>）。ほかの名前（リバースプロキシの公開名など）で開くなら、settings.js に
+      <code>wsuhaBroute: { allowedHosts: ['nodered.example.com'] }</code> と追加してください（<code>'.example.com'</code> と書くと下の名前も通ります）。</li>
+    <li>Web UI からの操作を止めて読み出しだけにするには、settings.js に <code>wsuhaBroute: { readOnly: true }</code> と書きます。
+      フローの入力と編集画面からは変えられます。</li>
+    <li>Web UI と API を出さないなら <code>wsuhaBroute: { ui: false }</code> と書きます
+      （<code>httpNodeRoot: false</code> のときも出しません）。</li>
+    <li>見られる人も限るときは、Node-RED の <code>httpNodeAuth</code>（ブラウザーの Basic 認証。httpNode 全体に効きます。<code>RED.init</code> で埋め込んだ Node-RED には掛かりません）を使ってください。
+      <code>httpNodeMiddleware</code> は <code>http in</code> ノードにしか掛からないので、Web UI と API は守れません。</li>
+    <li><code>adminAuth</code> が無いサーバーでは、Node-RED に届く人は誰でも Web UI の［アダプタを追加］で <code>flows.json</code> へ台を追加できます
+      （上の、変更を全部断るサーバーを除きます）。止めるときは <code>wsuhaBroute: { uiAddAdapter: false }</code> と書きます。</li>
+  </ul>
+
+  <h3>認証情報の優先順位</h3>
+  <p>電力会社（一般送配電事業者）に B ルートサービスを申し込むと届きます。認証 ID は 32 桁の 16 進数（0〜9・A〜F）、パスワードは 12 桁の英数字です。
+     ここで入れた値は Node-RED が暗号化して <code>flows_cred.json</code> に保存するので、<b>書き出したフロー JSON には入りません</b>。
+     認証 ID もパスワードと同じ扱いで、入れたあとは欄に伏せ字で出し、エディタと管理 API から読み出せません。</p>
+  <ol>
+    <li>環境変数 <code>WSUHA_BROUTE_ID_&lt;デバイスキー&gt;</code> / <code>WSUHA_BROUTE_PASSWORD_&lt;デバイスキー&gt;</code></li>
+    <li>環境変数 <code>WSUHA_BROUTE_ID</code> / <code>WSUHA_BROUTE_PASSWORD</code></li>
+    <li>Web UI かフローの入力（<code>credentials</code>）で保存した値と、この編集画面で入力した値の、<b>後から入れた方</b>
+      （Web UI かフローで保存するとき、そのときの編集画面の値の指紋（塩つきの sha256。値そのものは残しません）を控えます。
+      デプロイのたびに今の値と比べ、編集画面で入れ直していたら Web UI かフローの値を外して、ログに 1 行と出力 2 の <code>config</code>
+      （<code>changedBy: 'editor'</code>）を出します。編集画面が空のまま Web UI で保存し、あとで編集画面で入れたときも同じです。
+      今と同じ値を入れ直しても、欄を空か片方だけにしてデプロイしても、Web UI かフローの値は外れません（そのあとで両方の値を入れたら、編集画面の値が効きます）。
+      編集画面の値に戻すには、Web UI の「画面で入れた値を消す…」か、フローの入力 <code>credentials-reset</code> を使います）</li>
+    <li>秘密ファイル <code>wsuha-broute-&lt;デバイスキー&gt;.secret.json</code>（移行用。デバイスキーのある台だけ。userDir・作業ディレクトリ・ホームの順に探します）</li>
+    <li>接続先がシミュレーターで、上のどれも無いときだけ、架空の値</li>
+  </ol>
+  <p>Web UI と出力 2 の status には、出どころの名前（「環境変数」「画面かフローで保存した値」「設定ノード」「ファイル（wsuha-broute-&lt;デバイスキー&gt;.secret.json）」「シミュレーターの架空の値」）
+     と、見つからないときの理由（見つかりません・読めません・形式が正しくありません）、PairID（認証 ID の下 8 桁。電波にも出る値）だけを出します。
+     秘密ファイルの場所と読めなかった理由の詳細は、Node-RED のログにだけ出します。</p>
+
+  <h3>詳細設定の項目</h3>
+  <dl class="message-properties">
+    <dt>デバイスキー</dt>
+    <dd>環境変数の名前の末尾（<code>WSUHA_BROUTE_ID_USB0</code> の <code>USB0</code>）と、移行用の秘密ファイルの名前に使います。
+        英数字と <code>_</code> <code>-</code> で 32 文字まで。1 台だけなら空でかまいません。</dd>
+    <dt>想定 MAC</dt>
+    <dd>入れると、起動時の <code>SKINFO</code> でアダプタの個体を照合します。<code>/dev/ttyUSB*</code> の番号は抜き差しで入れ替わるため、
+        別のアダプタが挿さっていたらエラーで知らせます。</dd>
+    <dt>スキャンの段階</dt>
+    <dd>メーターが見つからないとき、この順で <code>SKSCAN</code> の DURATION を伸ばします。</dd>
+    <dt>受信の形式を自動で合わせる</dt>
+    <dd>ERXUDP を 16 進 ASCII の表示にする設定（<code>WOPT 01</code>）です。<b>アダプタの内部 FLASH に書き込みます
+        （書き込める回数の上限は 10,000 回）</b>。<code>ROPT</code> で今の値を読み、必要なときだけ 1 回書くので、ふつうは 1 台につき 1 回だけです。</dd>
+  </dl>
+
+  <h3>シミュレーター</h3>
+  <p>実機が無くても、接続の手順から計測値の取得まで一通り動きます。
+     ダッシュボードを組み立てるときや、動作を確かめたいときに使ってください。</p>
+  <p>接続先を「シミュレーター（実機なしで試す）」にしてデプロイするだけで動きます。認証情報が無ければ架空の値を使います（出どころは「シミュレーターの架空の値」）。
+     認証 ID を入れたときは、その ID のメーターとして動きます。ID だけを入れたときと、秘密ファイルが読めないときは、入れ間違いに気づけるように架空の値を使わず「認証情報がありません」のままにします。</p>
+  <p>詳細設定の「模擬設定」は JSON のオブジェクトで書きます。読めないときは既定の動きにして、Node-RED のログに警告を出します。
+     接続先を実機へ切り替えると、シミュレーターで取った値は <code>read</code> に出しません（認証 ID が同じでも同じです）。</p>
+</script>

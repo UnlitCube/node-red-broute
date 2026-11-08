@@ -1,0 +1,315 @@
+[
+    {
+        "id": "ex03000000000001",
+        "type": "tab",
+        "label": "B ルート（通知と操作）",
+        "disabled": false,
+        "info": "シミュレーターを相手に、次の 2 つを試す例です。\n\n- つながらない状態が続いたことを知る（出力 2 の `alert` と `recovered`、Catch ノード）\n- Web UI と同じ操作を、inject から送る（`settings`・`settings-reset`・`diag`・`detail`・`read`）\n\n返事は出力 2 に流れ、右のデバッグに出ます。\n\nつながらない状態を試すには、アダプタの詳細設定の「模擬設定」に `{\"fail\":{\"open\":4}}` を入れてデプロイします。シミュレーターがポートを 4 回開けないふりをするので、約 30 秒で `alert` と Catch が、約 2 分で `recovered` がデバッグに流れます。試したら、模擬設定を空に戻してください。"
+    },
+    {
+        "id": "ex03000000000002",
+        "type": "wsuha-device",
+        "name": "例 03",
+        "enabled": true,
+        "role": "電力",
+        "mode": "simulator",
+        "serialport": "",
+        "serialbaud": 115200,
+        "deviceKey": "",
+        "expectedMac": "",
+        "pollInterval": 30,
+        "pollEpcs": "E7, E8",
+        "slowIntervalSec": "",
+        "halfHourIntervalSec": "",
+        "autoStart": true,
+        "autoWriteWopt": true,
+        "scanDurations": "4,5,6,7,8",
+        "simulatorOptions": ""
+    },
+    {
+        "id": "ex03000000000003",
+        "type": "comment",
+        "z": "ex03000000000001",
+        "name": "左のボタンを押すと、Web UI と同じ操作を送ります",
+        "info": "`settings` で保存した値は再起動しても残ります。試したあとは「運用設定を外す」を押すと、設定ノードの値に戻ります。",
+        "x": 260,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "ex03000000000004",
+        "type": "inject",
+        "z": "ex03000000000001",
+        "name": "取得間隔を 60 秒にする",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "settings",
+        "payload": "{\"pollIntervalSec\":60}",
+        "payloadType": "json",
+        "x": 170,
+        "y": 100,
+        "wires": [
+            [
+                "ex03000000000010"
+            ]
+        ]
+    },
+    {
+        "id": "ex03000000000005",
+        "type": "inject",
+        "z": "ex03000000000001",
+        "name": "運用設定を外す",
+        "props": [
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "settings-reset",
+        "x": 150,
+        "y": 150,
+        "wires": [
+            [
+                "ex03000000000010"
+            ]
+        ]
+    },
+    {
+        "id": "ex03000000000006",
+        "type": "inject",
+        "z": "ex03000000000001",
+        "name": "アダプタの情報を読む",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "diag",
+        "payload": "{\"name\":\"info\"}",
+        "payloadType": "json",
+        "x": 170,
+        "y": 200,
+        "wires": [
+            [
+                "ex03000000000010"
+            ]
+        ]
+    },
+    {
+        "id": "ex03000000000007",
+        "type": "inject",
+        "z": "ex03000000000001",
+        "name": "状態を読む",
+        "props": [
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "detail",
+        "x": 140,
+        "y": 250,
+        "wires": [
+            [
+                "ex03000000000010"
+            ]
+        ]
+    },
+    {
+        "id": "ex03000000000008",
+        "type": "inject",
+        "z": "ex03000000000001",
+        "name": "最新値を読む",
+        "props": [
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "read",
+        "x": 150,
+        "y": 300,
+        "wires": [
+            [
+                "ex03000000000010"
+            ]
+        ]
+    },
+    {
+        "id": "ex03000000000010",
+        "type": "wsuha-broute",
+        "z": "ex03000000000001",
+        "name": "",
+        "device": "ex03000000000002",
+        "epcFilter": "",
+        "emitMeasurements": false,
+        "emitStatus": false,
+        "emitLogs": false,
+        "emitRaw": false,
+        "alertAfterFailures": 3,
+        "waitSec": 120,
+        "x": 410,
+        "y": 200,
+        "wires": [
+            [],
+            [
+                "ex03000000000011"
+            ]
+        ]
+    },
+    {
+        "id": "ex03000000000011",
+        "type": "switch",
+        "z": "ex03000000000001",
+        "name": "通知か返事か",
+        "property": "topic",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "eq",
+                "v": "alert",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "recovered",
+                "vt": "str"
+            },
+            {
+                "t": "else"
+            }
+        ],
+        "checkall": "true",
+        "repair": false,
+        "outputs": 3,
+        "x": 620,
+        "y": 200,
+        "wires": [
+            [
+                "ex03000000000012"
+            ],
+            [
+                "ex03000000000013"
+            ],
+            [
+                "ex03000000000014"
+            ]
+        ]
+    },
+    {
+        "id": "ex03000000000012",
+        "type": "debug",
+        "z": "ex03000000000001",
+        "name": "つながらない状態が続いています",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 860,
+        "y": 140,
+        "wires": []
+    },
+    {
+        "id": "ex03000000000013",
+        "type": "debug",
+        "z": "ex03000000000001",
+        "name": "復旧しました",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 810,
+        "y": 200,
+        "wires": []
+    },
+    {
+        "id": "ex03000000000014",
+        "type": "debug",
+        "z": "ex03000000000001",
+        "name": "操作の返事",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 810,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "ex03000000000015",
+        "type": "catch",
+        "z": "ex03000000000001",
+        "name": "",
+        "scope": [
+            "ex03000000000010"
+        ],
+        "uncaught": false,
+        "x": 430,
+        "y": 340,
+        "wires": [
+            [
+                "ex03000000000016"
+            ]
+        ]
+    },
+    {
+        "id": "ex03000000000016",
+        "type": "debug",
+        "z": "ex03000000000001",
+        "name": "Catch で拾ったエラー",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 640,
+        "y": 340,
+        "wires": []
+    }
+]

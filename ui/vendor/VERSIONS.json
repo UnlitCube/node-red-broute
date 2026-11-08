@@ -1,0 +1,51 @@
+{
+  "note": "npm の公開レジストリの tgz（integrity を照合済み）から取り出した ES Modules の版。ビルドせずにそのまま配る。sha256 は同梱したファイルのもの（test/ui/vendor.test.mjs が照合する）。",
+  "fetchedAt": "2026-11-05",
+  "files": {
+    "preact.mjs": {
+      "package": "preact",
+      "version": "10.29.8",
+      "license": "MIT",
+      "publishedAt": "2026-08-01T09:59:54.572Z",
+      "tarball": "https://registry.npmjs.org/preact/-/preact-10.29.8.tgz",
+      "integrity": "sha512-ej2aVZ+vZ8WO7tvlQWRM9N63A0KzF9q4mWJfDUHgYaIofWY9hu74QdnQrjoPMmZi2/nZ5gN0bJCQF49xQqx09Q==",
+      "source": "package/dist/preact.module.js",
+      "sourceSha256": "c30e721ebfdc6e2ad4c18c14d2dfb82667829c8aec27de1207774e3fc16858a8",
+      "sha256": "25a5df7e9f628a587743c4641a368737a3b218f28ef738ba0376a2d5bdfc948c",
+      "changes": [
+        "末尾の sourceMappingURL の行を外した（.map は同梱しない）"
+      ]
+    },
+    "hooks.mjs": {
+      "package": "preact",
+      "version": "10.29.8",
+      "license": "MIT",
+      "publishedAt": "2026-08-01T09:59:54.572Z",
+      "tarball": "https://registry.npmjs.org/preact/-/preact-10.29.8.tgz",
+      "integrity": "sha512-ej2aVZ+vZ8WO7tvlQWRM9N63A0KzF9q4mWJfDUHgYaIofWY9hu74QdnQrjoPMmZi2/nZ5gN0bJCQF49xQqx09Q==",
+      "source": "package/hooks/dist/hooks.module.js",
+      "sourceSha256": "a6ee626f2d01570592dd569a792e3f050154aa02890eead8c223fa3ed5aa3d5a",
+      "sha256": "41391bb2f3153900ffbec61cd06d4ba5a62bb7458d63d83a4cded54245062bc1",
+      "changes": [
+        "import の指定子 \"preact\" を \"./preact.mjs\" に直した",
+        "末尾の sourceMappingURL の行を外した（.map は同梱しない）"
+      ]
+    },
+    "htm.mjs": {
+      "package": "htm",
+      "version": "3.1.1",
+      "license": "Apache-2.0",
+      "publishedAt": "2022-04-26T16:23:10.427Z",
+      "tarball": "https://registry.npmjs.org/htm/-/htm-3.1.1.tgz",
+      "integrity": "sha512-983Vyg8NwUE7JkZ6NmOqpCZ+sh1bKv2iYTlUkzlWmA5JD2acKoxd4KVxbMmxX/85mtfdnDmTFoNKcg5DGAvxNQ==",
+      "source": "package/dist/htm.module.js",
+      "sourceSha256": "ab33dd3f38059b9be4d5f5350128eefb2356639c4e0bbe9d9e8b3ba75847e9e4",
+      "sha256": "ab33dd3f38059b9be4d5f5350128eefb2356639c4e0bbe9d9e8b3ba75847e9e4",
+      "changes": []
+    }
+  },
+  "licenses": {
+    "preact": "LICENSES/preact-LICENSE.txt",
+    "htm": "LICENSES/htm-LICENSE.txt"
+  }
+}
