@@ -253,18 +253,21 @@ test('CHANGELOG: 見出しの形がそろい、今の版を切り出せる', () 
   assert.equal(changelogSection('## 1.0.0（2026-01-01）\n- あ\n', '1.0.0'), '', '前提: 全角括弧の見出しは切り出せない')
 })
 
-test('CHANGELOG: 動作が変わる変更が、いちばん新しい節（vNext が空なら最新の版）の先頭にある', () => {
+test('CHANGELOG: 動作が変わる変更は節の先頭にあり、最新の版と vNext に主な変更が書いてある', () => {
   const log = read('CHANGELOG.md')
-  let v = changelogSection(log, 'vNext')
-  if (!v.trim()) {
-    const m = log.match(/^## v(\d+\.\d+\.\d+(?:-[\w.]+)?) \(\d{4}-\d{2}-\d{2}\)$/m)
-    assert.ok(m, '版の見出しが「## vX.Y.Z (YYYY-MM-DD)」の形')
-    assert.equal(m[1], require('../package.json').version, '最新の版の見出しは package.json の版')
-    v = changelogSection(log, 'v' + m[1])
+  const m = log.match(/^## v(\d+\.\d+\.\d+(?:-[\w.]+)?) \(\d{4}-\d{2}-\d{2}\)$/m)
+  assert.ok(m, '版の見出しが「## vX.Y.Z (YYYY-MM-DD)」の形')
+  assert.equal(m[1], require('../package.json').version, '最新の版の見出しは package.json の版')
+  // vNext と最新の版のどちらも、動作が変わる変更の節があるならいちばん先に置く
+  for (const name of ['vNext', 'v' + m[1]]) {
+    const sec = changelogSection(log, name)
+    if (/^### ⚠/m.test(sec)) assert.match(sec, /^### ⚠ 動作が変わる変更/, `${name} の最初の節は「動作が変わる変更」`)
   }
-  assert.match(v, /^### ⚠ 動作が変わる変更/)
-  for (const w of ['adminAuth', 'X-Wsuha-Editor-Token', 'X-Wsuha-Radio', 'serialport', '3.1', 'allowAnonymousWrites', 'event', 'wiring']) {
-    assert.ok(v.includes(w), `vNext に ${w} の変更がありません`)
+  // 認証・電波の read・serialport などの動作が変わる変更を入れた版（2.0.0-beta.3）の節に、利用者が読むべき変更が書いてある
+  const v = changelogSection(log, 'v2.0.0-beta.3')
+  assert.match(v, /^### ⚠ 動作が変わる変更/, 'v2.0.0-beta.3 の最初の節は「動作が変わる変更」')
+  for (const w of ['adminAuth', 'X-Wsuha-Editor-Token', 'X-Wsuha-Radio', 'serialport', '3.1', 'allowAnonymousWrites', 'event', 'wiring', '@unlitcube/node-red-broute']) {
+    assert.ok(v.includes(w), `v2.0.0-beta.3 に ${w} の変更がありません`)
   }
 })
 

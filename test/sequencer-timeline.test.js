@@ -837,7 +837,7 @@ test('定期の取得が全部 Get_SNA なら値が古いと出す。応答は�
   assert.equal(k.seq.state.lastValueAt, lastValue)
   assert.equal(s.stale, true)
   assert.equal(s.health.level, 'stale')
-  assert.match(s.health.title, /値が届いていません（最終 \d+ 分前）/)
+  assert.match(s.health.title, /瞬時電力が届いていません（最終 \d+ 分前）/)
   // 控えの動き: E7 は控えているが、全部控えているときは設定どおりに聞き続ける
   const snap = k.seq.snapshot()
   assert.ok(snap.unsupportedEpcs.includes('0xE7'), snap.unsupportedEpcs.join(' '))

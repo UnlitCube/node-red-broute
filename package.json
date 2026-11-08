@@ -1,6 +1,6 @@
 {
   "name": "@unlitcube/node-red-broute",
-  "version": "2.0.0-beta.3",
+  "version": "2.0.0-beta.4",
   "type": "commonjs",
   "description": "Read Japanese low-voltage smart meters over the B-route with a Wi-SUN USB adapter (tested with RATOC RS-WSUHA). 低圧スマートメーターの B ルート計測ノードと Web UI。",
   "keywords": [

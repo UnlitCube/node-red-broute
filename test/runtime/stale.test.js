@@ -117,7 +117,7 @@ test('起動して最初の接続は、値を待つ間だけ猶予する', () =>
   assert.equal(fresh.stale, false)
   const late = vm.buildSummary(inputOf({ valueWaitSince: NOW - 10 * MIN }, NOW - 10 * MIN), NOW)
   assert.equal(late.stale, true, '猶予（取得間隔 × 3 + 30 秒）を過ぎても値が無ければ古い')
-  assert.match(late.health.title, /まだ値が届いていません/)
+  assert.match(late.health.title, /まだ瞬時電力が届いていません/, '何が届いていないかを名前で書く')
 })
 
 test('瞬時電力が届いていれば古くなく、合計に入る', () => {
@@ -149,12 +149,12 @@ test('取得間隔の値から瞬時電力を外した台は、台は古くな�
   assert.equal(total.staleCount, 1)
 })
 
-test('控えの期限が切れて聞き直しているのに返らないときは、控えの案内でなく再接続の案内', () => {
+test('控えの期限が切れて聞き直しても返らないまま（取得間隔の 2 回分を過ぎた）ときは、控えの案内でなく再接続の案内', () => {
   const s = vm.buildSummary(
     inputOf(
       {
         known: { '0xE7': { value: 405, at: NOW - 30 * MIN } },
-        snaHold: { '0xE7': { count: 2, until: NOW - 1 * MIN, at: NOW - 6 * MIN } },
+        snaHold: { '0xE7': { count: 2, until: NOW - 5 * MIN, at: NOW - 10 * MIN } },
         lastValueAt: NOW - 30 * MIN,
       },
       NOW - 180 * MIN
@@ -163,6 +163,23 @@ test('控えの期限が切れて聞き直しているのに返らないとき�
   )
   assert.equal(s.health.level, 'stale')
   assert.doesNotMatch(s.health.nextAction, /メーターがこの値を返していません/)
+})
+
+// 戻すと落ちるもの: pollHeldOf が期限（until > now）だけを見る（聞き直すまでの間に、起きない再接続を案内する）
+test('控えの期限が切れた直後（聞き直すまで）は、最後に断られたのが最後の値より後なら控えの案内のまま', () => {
+  const s = vm.buildSummary(
+    inputOf(
+      {
+        known: { '0xE7': { value: 405, at: NOW - 30 * MIN } },
+        snaHold: { '0xE7': { count: 2, until: NOW - 10 * 1000, at: NOW - 6 * MIN } },
+        lastValueAt: NOW - 30 * MIN,
+      },
+      NOW - 180 * MIN
+    ),
+    NOW
+  )
+  assert.equal(s.health.level, 'stale')
+  assert.match(s.health.nextAction, /メーターがこの値を返していません/)
 })
 
 test('連続失敗が 3 回以上でも、つながっていて値を断られているだけなら控えの案内を出す', () => {
