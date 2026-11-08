@@ -78,8 +78,9 @@ function createBroute(fake, devId, extra) {
 const measurements = (node) => node._sent.filter((m) => Array.isArray(m) && m[0])
 const skterms = (dev) => dev.sequencer.transport.sent.filter((c) => /^SKTERM/.test(c)).length
 
+// 接続の待ちは長めにとる（負荷の下では数秒かかり、VM が数秒止まることもある。通る試験の時間は変わらない）
 async function connected(dev) {
-  await waitFor(() => dev.sequencer && dev.sequencer.isConnected, 8000, '接続')
+  await waitFor(() => dev.sequencer && dev.sequencer.isConnected, 30000, '接続')
 }
 
 afterEach(async () => {

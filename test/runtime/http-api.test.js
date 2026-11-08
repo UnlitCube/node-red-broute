@@ -13,7 +13,7 @@ const { install, mapError, withTimeout, parseIfMatch, isSameOrigin, isAllowedHos
 const { createRegistry } = require('../../lib/runtime/registry')
 const { createSettingsStore } = require('../../lib/runtime/settings-store')
 const { createFakeRed, FakeRes, parseSse, waitFor, tmpDir, ID, PW } = require('./fake-red')
-const { makeAdapter, connect } = require('./adapter-kit')
+const { makeAdapter, connect, READY_MS } = require('./adapter-kit')
 const { holdEchonet } = require('../hold-echonet')
 
 const B = '/wsuha-broute/api/v1'
@@ -55,9 +55,10 @@ before(async () => {
     sse: { throttleMs: 20, pingMs: 60000, maxAgeMs: 600000 },
   })
   const a = makeAdapter(registry, 'dev-a', { name: '電力メーター' })
-  await connect(a.seq)
+  // 繋がらずに投げても after で片付くように、ctx は繋ぐ前に置く（回ったままの sequencer を残すと、Node 18 ではファイルが終わらない）
   ctx = { fake, registry, rt, a }
   ctx.req = async (method, url, p) => keep(await fake.request(method, url, p))
+  await connect(a.seq)
 })
 
 after(async () => {
@@ -337,8 +338,8 @@ test('actions: stop・reconnect（409）・start・auto・get・poll・clear-rad
   assert.equal(r.statusCode, 200)
   assert.equal(r.body.adapter.overridden.stopped, null, '外部の停止の上書きも外す')
   assert.equal(r.body.adapter.running, true)
-  await waitFor(() => a.seq.isConnected, 8000, '繋がり直す')
-  await waitFor(() => a.seq._requestDepth === 0 && !a.seq._current, 8000, '接続時の取得')
+  await waitFor(() => a.seq.isConnected, READY_MS, '繋がり直す')
+  await waitFor(() => a.seq._requestDepth === 0 && !a.seq._current, READY_MS, '接続時の取得')
 
   r = await ctx.req('POST', B + '/adapters/dev-a/actions/reconnect', { body: { ladder: 4 } })
   assert.equal(r.statusCode, 422)
@@ -382,13 +383,19 @@ async function lonelyAdapter(id, installOpts, redOpts) {
   const registry = createRegistry()
   const rt = install(fake.RED, Object.assign({ registry, uiDir: tmpDir('wsuha-ui-') }, installOpts))
   const a = makeAdapter(registry, id, { seq: { sendTimeout: 5000 } })
-  await connect(a.seq)
-  // 接続直後の「今すぐの取得」（_schedulePoll(0)）が済んで、次の周期（30 秒後）を待つところまで
-  await new Promise((r) => setTimeout(r, 100))
-  await waitFor(() => a.seq._requestDepth === 0 && !a.seq._pending, 5000, '接続直後の取得')
   const dispose = async () => {
     if (rt.hub) rt.hub.dispose()
     await a.seq.destroy()
+  }
+  // 繋がらずに投げても片付ける（呼ぶ側の finally は返ってから。回ったままの sequencer を残すと、Node 18 ではファイルが終わらない）
+  try {
+    await connect(a.seq)
+    // 接続直後の「今すぐの取得」（_schedulePoll(0)）が済んで、次の周期（30 秒後）を待つところまで
+    await new Promise((r) => setTimeout(r, 100))
+    await waitFor(() => a.seq._requestDepth === 0 && !a.seq._pending, READY_MS, '接続直後の取得')
+  } catch (e) {
+    await dispose().catch(() => {})
+    throw e
   }
   return { fake, rt, a, dispose }
 }
@@ -475,13 +482,13 @@ test('止めている台へのメーターの取得は 409 STOPPED_BY_OVERRIDE �
   // 止めている間はつながらないのに、503 で「つながるのを待ってから」と案内していた。
   // 戻すと落ちるもの: service.js の requireMeter で overrides.stopped を見ない・requirePort より後に見る
   const t = makeAdapter(ctx.registry, 'held', {})
-  await connect(t.seq)
   const refused = (r, what) => {
     assert.equal(r.statusCode, 409, `${what}: ${r.text}`)
     assert.equal(r.body.error.code, 'STOPPED_BY_OVERRIDE', what)
     assert.match(r.body.error.message, /先に「開始」か「自動運転に戻す」を押してください/, what)
   }
   try {
+    await connect(t.seq)
     assert.equal((await ctx.req('POST', B + '/adapters/held/actions/stop', { body: { reason: '点検のため' } })).statusCode, 200)
     refused(await ctx.req('POST', B + '/adapters/held/actions/poll'), 'poll')
     refused(await ctx.req('POST', B + '/adapters/held/actions/get', { body: { epcs: ['E7'] } }), 'get')
@@ -502,9 +509,9 @@ test('actions: terminate の待ちの上限は、認証の途中（38 秒ほど�
   const registry = createRegistry()
   const rt = install(fake.RED, { registry, uiDir: tmpDir('wsuha-ui-'), diagIntervalMs: 0 })
   const t = makeAdapter(registry, 'term-limit', {})
-  await connect(t.seq)
-  t.seq.terminate = async () => {}
   try {
+    await connect(t.seq)
+    t.seq.terminate = async () => {}
     const timer = tc.mock.method(globalThis, 'setTimeout')
     const r = await fake.request('POST', B + '/adapters/term-limit/actions/terminate')
     assert.equal(r.statusCode, 200, r.text)
@@ -519,8 +526,8 @@ test('actions: terminate の待ちの上限は、認証の途中（38 秒ほど�
 test('actions: terminate は PANA セッションを終了して止める', async () => {
   // 共有の台を使うと、繋がり直すまで（SKREJOIN の失敗 → 段階 1）後の試験が待たされるので別の台で
   const t = makeAdapter(ctx.registry, 'term', {})
-  await connect(t.seq)
   try {
+    await connect(t.seq)
     const r = await ctx.req('POST', B + '/adapters/term/actions/terminate')
     assert.equal(r.statusCode, 200, r.text)
     assert.ok(t.seq.transport.sent.some((c) => /^SKTERM/.test(c)))
@@ -608,8 +615,8 @@ test('diag: 1 台あたり 3 秒に 1 回まで（429 と Retry-After）', async
   const registry = createRegistry()
   const rt = install(fake.RED, { registry, uiDir: tmpDir('wsuha-ui-') })
   const a = makeAdapter(registry, 'rate', {})
-  await connect(a.seq)
   try {
+    await connect(a.seq)
     const first = await fake.request('POST', B + '/adapters/rate/diag', { body: { name: 'ropt' } })
     assert.equal(first.statusCode, 200)
     const second = await fake.request('POST', B + '/adapters/rate/diag', { body: { name: 'ropt' } })

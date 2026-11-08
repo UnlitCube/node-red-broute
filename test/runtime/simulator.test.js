@@ -275,9 +275,10 @@ test('設定なしの SimulatorTransport に Sequencer でつながる', async (
   const transport = new SimulatorTransport({ scanTimeScale: 0.01, latencyMs: 1, joinMs: 10 })
   const seq = new Sequencer(transport, { resetSettleMs: 20, scanDurations: [5] })
   seq.setCredentials(ID, PW, 'test')
-  await seq.start()
   try {
-    await waitFor(() => seq.isConnected, 8000, '接続')
+    await seq.start()
+    // 接続の待ちは長めにとる（負荷の下では数秒かかり、VM が数秒止まることもある。通る試験の時間は変わらない）
+    await waitFor(() => seq.isConnected, 30000, '接続')
     assert.equal(seq.snapshot().meter.pairId, ID.slice(-8))
   } finally {
     await seq.destroy()

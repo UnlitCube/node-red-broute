@@ -55,10 +55,16 @@ async function setup(settings, tokens, installOpts) {
   const registry = createRegistry()
   const rt = install(fake.RED, Object.assign({ registry, uiDir: tmpDir('wsuha-ui-'), diagIntervalMs: 0 }, installOpts))
   const a = makeAdapter(registry, 'auth', {})
-  await connect(a.seq)
   const dispose = async () => {
     if (rt.hub) rt.hub.dispose()
     await a.seq.destroy()
+  }
+  // 繋がらずに投げても片付ける（呼ぶ側の finally は setup が返ってから。回ったままの sequencer を残すと、Node 18 ではファイルが終わらない）
+  try {
+    await connect(a.seq)
+  } catch (e) {
+    await dispose().catch(() => {})
+    throw e
   }
   return { fake, rt, a, dispose }
 }

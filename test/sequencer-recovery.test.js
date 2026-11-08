@@ -17,8 +17,9 @@ const { mapError } = require('../lib/runtime/service')
 const { connectHintOf } = require('../lib/runtime/view-model')
 const { hintOf } = require('../lib/runtime/error-hints')
 const { health } = require('../lib/runtime/health')
+const waitKit = require('./wait-kit')
 
-const ID = '0123456789ABCDEF0123456789ABCDEF'
+const ID ='0123456789ABCDEF0123456789ABCDEF'
 const PW = 'ABCDEF123456'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -29,15 +30,12 @@ afterEach(async () => {
   for (const s of live.splice(0)) await s.destroy().catch(() => {})
 })
 
-// 時間は単調な時計で測る。壁時計は飛ぶことがあり（Docker の VM で秒単位）、飛ぶと待ちが早く切れる
-async function waitFor(fn, ms, what) {
-  const limit = performance.now() + (ms || 5000)
-  while (performance.now() < limit) {
-    if (fn()) return true
-    await sleep(5)
-  }
-  throw new Error('待ち時間を超えました: ' + (what || '条件'))
-}
+// 待ちの規則は test/wait-kit.js。時間は単調な時計で測る（壁時計は飛ぶことがあり、Docker の VM で秒単位。飛ぶと待ちが早く切れる）。
+// 期限を過ぎても投げる前にもう一度見て、プロセスごと止まっていた間は数えない
+const waitFor = (fn, ms, what) => waitKit.waitFor(fn, ms || 5000, what, 5)
+
+// 接続の待ち。負荷の下では数秒かかり、VM が数秒止まることもあるので長めにとる（通る試験の時間は変わらない）
+const READY_MS = 30000
 
 function build(simConfig, seqOptions) {
   const transport = new SimulatorTransport(Object.assign({ latencyMs: 1, joinMs: 10, scanTimeScale: 0.005 }, simConfig))
@@ -74,9 +72,9 @@ function build(simConfig, seqOptions) {
 }
 
 async function ready(seq) {
-  await waitFor(() => seq.isConnected, 8000, '接続')
-  await waitFor(() => seq.snapshot().known['0xE7'], 8000, '最初の取得')
-  await waitFor(() => seq._requestDepth === 0 && !seq._current && seq._queue.length === 0, 8000, '接続時の取得')
+  await waitFor(() => seq.isConnected, READY_MS, '接続')
+  await waitFor(() => seq.snapshot().known['0xE7'], READY_MS, '最初の取得')
+  await waitFor(() => seq._requestDepth === 0 && !seq._current && seq._queue.length === 0, READY_MS, '接続時の取得')
 }
 
 function inject(transport, fail) {

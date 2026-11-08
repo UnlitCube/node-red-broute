@@ -3,15 +3,22 @@
 // 応答のたびの LQI を推移に記録する。間引くときは枠の中の最小を残す（落ち込みを隠さない）。
 // 戻すと落ちるもの: registry.js の _recordTrend で LQI を持たない・decimateMin を平均に戻す。
 
-const { test } = require('node:test')
+const { test, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { createRegistry } = require('../../lib/runtime/registry')
 const vm = require('../../lib/runtime/view-model')
 const { makeAdapter, connect } = require('./adapter-kit')
 
+// 試験が途中で落ちても片付ける。回ったままの sequencer を残すと、Node 18 では試験のファイルが終わらない
+const live = []
+afterEach(async () => {
+  for (const s of live.splice(0)) await s.destroy().catch(() => {})
+})
+
 test('推移に series.lqi が入り、Detail の meter に rssi と lqiAt が入る', async () => {
   const reg = createRegistry()
   const { h, seq } = makeAdapter(reg, 'lq1')
+  live.push(seq)
   await connect(seq)
   await seq.get([0xe7], 'test')
   const t = h.trend(3600000, Date.now() + 1000, 720)

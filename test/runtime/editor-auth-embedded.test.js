@@ -56,7 +56,13 @@ const ENV = { WSUHA_BROUTE_ID_SIM1: ID, WSUHA_BROUTE_PASSWORD_SIM1: PW }
 /** 立てて、設定ノードが載るまで待つ。headers はどの要求にも付ける（httpNodeAuth の Basic など）。 */
 async function start(settings, headers) {
   const s = await boot(FLOWS, { env: ENV, settings })
-  await until(async () => (await s.j('GET', `${A}/adapters/d1`, undefined, headers)).status === 200, '設定ノード')
+  // 待ちが切れても子プロセスを止めてから投げる（呼ぶ側の finally は start が返ってから。残すとファイルが終わらない）
+  try {
+    await until(async () => (await s.j('GET', `${A}/adapters/d1`, undefined, headers)).status === 200, '設定ノード')
+  } catch (e) {
+    await s.close().catch(() => {})
+    throw e
+  }
   return s
 }
 

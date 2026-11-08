@@ -10,8 +10,9 @@ const Module = require('node:module')
 const { EventEmitter } = require('node:events')
 const { SerialTransport } = require('../lib/serial-transport')
 const { Sequencer } = require('../lib/sequencer')
+const waitKit = require('./wait-kit')
 
-const ID = '0123456789ABCDEF0123456789ABCDEF'
+const ID ='0123456789ABCDEF0123456789ABCDEF'
 const PW = 'ABCDEF123456'
 
 const REQUIRE_FAILURE = "Cannot find module 'serialport'\nRequire stack:\n- /tmp/u/node_modules/x/lib/serial-transport.js\n- /tmp/u/node_modules/x/nodes/wsuha-device.js"
@@ -41,15 +42,8 @@ afterEach(async () => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// 待ちは単調な時計で測る。壁時計は飛ぶことがある
-async function waitFor(fn, ms, what) {
-  const limit = performance.now() + (ms || 3000)
-  while (performance.now() < limit) {
-    if (fn()) return true
-    await sleep(5)
-  }
-  throw new Error('待ち時間を超えました: ' + (what || '条件'))
-}
+// 待ちの規則は test/wait-kit.js（単調な時計で測る・期限を過ぎても投げる前にもう一度見る・プロセスごと止まっていた間は数えない）
+const waitFor = (fn, ms, what) => waitKit.waitFor(fn, ms || 3000, what, 5)
 
 /** 開くだけの偽の serialport。 */
 class FakePort extends EventEmitter {

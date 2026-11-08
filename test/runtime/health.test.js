@@ -57,8 +57,8 @@ async function detailWhenPortFails(message) {
   seq.on('error', () => {})
   seq.setCredentials(ID, PW, 'test')
   h1.attach(seq)
-  seq.start()
   try {
+    seq.start()
     await waitFor(() => seq.snapshot().lastError, 3000, 'ポートの失敗')
     return vm.buildDetail(h1.inspect(), Date.now())
   } finally {

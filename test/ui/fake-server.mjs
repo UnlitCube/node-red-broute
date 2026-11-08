@@ -17,6 +17,7 @@ const vm = require('../../lib/runtime/view-model.js')
 const { totalOf } = require('../../lib/runtime/service.js')
 const { buildRead } = require('../../lib/runtime/read-values.js')
 const { AdapterHandle } = require('../../lib/runtime/registry.js')
+const waitKit = require('../wait-kit.js')
 
 export const BASE = 'http://127.0.0.1:3985/wsuha-broute/ui/'
 export const NOT_FOUND = { error: { code: 'ADAPTER_NOT_FOUND', message: 'アダプタが見つかりません' } }
@@ -85,13 +86,12 @@ export function json(status, body) {
 export const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /**
- * cond が真になるまで待つ（npm test の並列で遅くなっても落ちないよう、上限は長め）。
- * 時計は単調な時計で測る（壁時計は飛ぶことがあり、Docker の VM では 30 秒ごとに 1 秒ほど進む。進むと待ちが早く切れる）。
+ * cond が真になるまで待つ（npm test の並列で遅くなっても落ちないよう、上限は長め）。最後の cond の値を返す。
+ * 待ちの規則は test/wait-kit.js（単調な時計で測る。壁時計は飛ぶことがあり、Docker の VM では 30 秒ごとに 1 秒ほど進む。
+ * 期限を過ぎても最後にもう一度見て、プロセスごと止まっていた間は数えない）。
  */
 export async function until(cond, ms = 3000) {
-  const end = performance.now() + ms
-  while (!cond() && performance.now() < end) await wait(20)
-  return cond()
+  return (await waitKit.poll(cond, ms, 20)).value
 }
 
 export const countOf = (server, re) => server.calls.filter((c) => re.test(new URL(c.url).pathname)).length

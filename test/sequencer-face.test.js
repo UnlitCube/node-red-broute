@@ -22,6 +22,7 @@ const { commandKind } = require('../lib/runtime/pending')
 const outputs = require('../lib/runtime/outputs')
 const { makeAdapter, connect } = require('./runtime/adapter-kit')
 const { ID, PW } = require('./runtime/fake-red')
+const waitKit = require('./wait-kit')
 
 // 試験が途中で落ちても片付ける。回ったままの sequencer を残すと、Node 18 では試験のプロセスが終わらない
 const live = []
@@ -29,15 +30,8 @@ afterEach(async () => {
   for (const s of live.splice(0)) await s.destroy().catch(() => {})
 })
 
-// 待ちは単調な時計で測る。壁時計は飛ぶことがある
-async function waitFor(fn, ms, what) {
-  const limit = performance.now() + (ms || 5000)
-  while (performance.now() < limit) {
-    if (fn()) return true
-    await new Promise((r) => setTimeout(r, 5))
-  }
-  throw new Error('待ち時間を超えました: ' + (what || '条件'))
-}
+// 待ちの規則は test/wait-kit.js（単調な時計で測る・期限を過ぎても投げる前にもう一度見る・プロセスごと止まっていた間は数えない）
+const waitFor = (fn, ms, what) => waitKit.waitFor(fn, ms || 5000, what, 5)
 
 /** 片付けの一覧に載せた 1 台ぶんのアダプタ。 */
 function adapter(id, opts) {

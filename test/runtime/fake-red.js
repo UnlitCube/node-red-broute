@@ -27,6 +27,7 @@ const { Readable } = require('node:stream')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const waitKit = require('../wait-kit')
 
 const HOST = '127.0.0.1:1880'
 
@@ -37,14 +38,12 @@ function tmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix || 'wsuha-test-'))
 }
 
-async function waitFor(fn, timeoutMs, what) {
-  // Date.now を差し替える試験でも待ちの上限が効くように、時計は performance.now で測る
-  const limit = performance.now() + (timeoutMs || 5000)
-  while (performance.now() < limit) {
-    if (fn()) return true
-    await new Promise((r) => setTimeout(r, 10))
-  }
-  throw new Error('待ち時間を超えました: ' + (what || '条件'))
+/**
+ * 条件が成り立つまで待つ。待ちの規則は test/wait-kit.js（単調な時計で測る・期限を過ぎても投げる前にもう一度見る・
+ * プロセスごと止まっていた間は数えない）。Date.now を差し替える試験でも上限が効く。
+ */
+function waitFor(fn, timeoutMs, what) {
+  return waitKit.waitFor(fn, timeoutMs || 5000, what, 10)
 }
 
 class FakeRes extends EventEmitter {

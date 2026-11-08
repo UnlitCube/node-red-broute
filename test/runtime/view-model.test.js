@@ -2,7 +2,7 @@
 
 // view-model（lib/runtime/view-model.js）。許可リストで組み立てること、秘密を出さないこと。
 
-const { test } = require('node:test')
+const { test, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { execFileSync } = require('node:child_process')
 const vm = require('../../lib/runtime/view-model')
@@ -36,9 +36,16 @@ function assertNoSecrets(text, where) {
   assert.ok(!/idHint/.test(s), `${where} に idHint の項目がある`)
 }
 
+// 試験が途中で落ちても片付ける。回ったままの sequencer を残すと、Node 18 では試験のファイルが終わらない
+const live = []
+afterEach(async () => {
+  for (const s of live.splice(0)) await s.destroy().catch(() => {})
+})
+
 test('接続した 1 台の全部の形に、認証 ID・パスワード・idHint が出ない', async () => {
   const reg = createRegistry()
   const { h, seq } = makeAdapter(reg, 'vm1')
+  live.push(seq)
   await connect(seq)
   await seq.get([0xe7, 0xe8], 'test')
   // 秘密を含む文字列を、見せる経路に流し込んでみる（ログ・停止の理由・直近のエラー）
@@ -69,6 +76,7 @@ test('接続した 1 台の全部の形に、認証 ID・パスワード・idHin
 test('Summary・Detail・ValueRow は許可した項目だけ', async () => {
   const reg = createRegistry()
   const { h, seq } = makeAdapter(reg, 'vm2')
+  live.push(seq)
   await connect(seq)
   await seq.get([0xe7, 0xe8], 'test')
   const input = h.inspect()

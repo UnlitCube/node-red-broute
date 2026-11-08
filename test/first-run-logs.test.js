@@ -10,6 +10,7 @@ const { Sequencer } = require('../lib/sequencer')
 const { SimulatorTransport } = require('../lib/simulator-transport')
 const { SerialTransport } = require('../lib/serial-transport')
 const { hintOf } = require('../lib/runtime/error-hints')
+const waitKit = require('./wait-kit')
 
 const ID = '0123456789ABCDEF0123456789ABCDEF'
 const PW = 'ABCDEF123456'
@@ -20,15 +21,9 @@ const DISPLAY_FORMAT = /受信データの表示形式が初期値のまま/
 const NOT_FOUND = /スキャンの段階 4 ではメーターが見つかりません/
 const DENIED = /メーターが 0x81 を返しませんでした/
 
-// 待ちは単調な時計で測る。壁時計は飛ぶことがある
-async function waitFor(fn, what) {
-  const limit = performance.now() + 8000
-  while (performance.now() < limit) {
-    if (fn()) return
-    await new Promise((r) => setTimeout(r, 10))
-  }
-  throw new Error('待ち時間を超えました: ' + what)
-}
+// 接続の待ち。待ちの規則は test/wait-kit.js（単調な時計で測る・期限を過ぎても投げる前にもう一度見る・
+// プロセスごと止まっていた間は数えない）。負荷の下では数秒かかり、VM が数秒止まることもあるので長めにとる
+const waitFor = (fn, what) => waitKit.waitFor(fn, 30000, what, 10)
 
 /** シミュレーターの既定のまま（バージョン・表示形式・スキャンの段階）で、待ち時間だけを詰めて接続する。 */
 async function connectOnce(onTransport) {

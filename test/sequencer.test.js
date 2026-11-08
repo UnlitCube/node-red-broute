@@ -7,6 +7,7 @@ const { test, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { Sequencer } = require('../lib/sequencer')
 const { SimulatorTransport } = require('../lib/simulator-transport')
+const waitKit = require('./wait-kit')
 
 const ID = '0123456789ABCDEF0123456789ABCDEF'
 const PW = 'ABCDEF123456'
@@ -17,15 +18,14 @@ afterEach(async () => {
   for (const s of live.splice(0)) await s.destroy().catch(() => {})
 })
 
-/** 条件が満たされるまで待つ。満たされなければ例外。壁時計は飛ぶことがあるので、単調な時計で測る。 */
-async function waitFor(fn, timeoutMs, what) {
-  const limit = performance.now() + (timeoutMs || 5000)
-  while (performance.now() < limit) {
-    if (fn()) return true
-    await new Promise((r) => setTimeout(r, 10))
-  }
-  throw new Error('待ち時間を超えました: ' + (what || '条件'))
-}
+/**
+ * 条件が満たされるまで待つ。満たされなければ例外。待ちの規則は test/wait-kit.js
+ * （単調な時計で測る・期限を過ぎても投げる前にもう一度見る・プロセスごと止まっていた間は数えない）。
+ */
+const waitFor = (fn, timeoutMs, what) => waitKit.waitFor(fn, timeoutMs || 5000, what, 10)
+
+// 接続の待ち。負荷の下では数秒かかり、VM が数秒止まることもあるので長めにとる（通る試験の時間は変わらない）
+const READY_MS = 30000
 
 /**
  * 接続し、接続直後の係数取得まで終わるのを待つ。
@@ -33,14 +33,14 @@ async function waitFor(fn, timeoutMs, what) {
  */
 async function waitReady(seq, ms, logs) {
   try {
-    await waitFor(() => seq.isConnected, ms || 8000, '接続')
+    await waitFor(() => seq.isConnected, ms || READY_MS, '接続')
     // 接続直後に「変わらないもの」を一括で取りに行く (係数・単位・
     // プロパティマップ・製造番号など)。その要求と重ならないよう、
     // 全部終わって静かになるまで待ってから次へ進む。
-    await waitFor(() => seq.snapshot().calibration.unitFactor !== null, ms || 8000, '係数の取得')
+    await waitFor(() => seq.snapshot().calibration.unitFactor !== null, ms || READY_MS, '係数の取得')
     await waitFor(
       () => seq._requestDepth === 0 && !seq._current && seq._queue.length === 0,
-      ms || 8000,
+      ms || READY_MS,
       '接続時の一括取得'
     )
   } catch (e) {
@@ -131,7 +131,7 @@ test('EVENT 25 だけでは接続済みにせず、疎通確認が通って初�
 test('SKJOIN が 2 回失敗しても 3 回目で接続できる', async () => {
   const { seq, logs } = build({ fail: { join: 2 } })
   await seq.start()
-  await waitReady(seq, 10000)
+  await waitReady(seq)
   assert.equal(seq.snapshot().counters.joins, 1)
   assert.ok(
     logs.some((l) => /メーターとの認証が通りませんでした（1 巡目 1\/3・[\d.]+ 秒）/.test(l.text)),
@@ -212,7 +212,8 @@ test('定期取得が回り、計測値が流れてくる', async () => {
   const got = []
   seq.on('measurement', (m) => got.push(m))
   await seq.start()
-  await waitFor(() => got.some((m) => m.values.some((v) => v.epc === 0xe7)), 9000, '瞬時電力の受信')
+  // 接続から最初の定期取得までを待つので、接続の待ちと同じ長さ
+  await waitFor(() => got.some((m) => m.values.some((v) => v.epc === 0xe7)), READY_MS, '瞬時電力の受信')
   const power = got.flatMap((m) => m.values).find((v) => v.epc === 0xe7)
   assert.equal(typeof power.value, 'number')
   assert.match(power.display, / W$/)
@@ -498,7 +499,7 @@ test('隣の契約のメーターの方が電波が強くても、自分の契�
     extraPans: [{ panId: 'AAAA', pairId: 'DEADBEEF', lqi: 0xf0 }], // 隣は強い
   })
   await seq.start()
-  await waitReady(seq, 10000)
+  await waitReady(seq)
 
   const s = seq.snapshot()
   assert.equal(s.meter.panid, '1234', '自分の契約の PAN へ繋ぐこと')
@@ -548,7 +549,7 @@ test('途中のフェーズで静かに止まったら、watchdog が引き剥�
     'watchdog の検出'
   )
   // 引き剥がしたあと、実際に繋ぎ直せること
-  await waitReady(seq, 12000)
+  await waitReady(seq)
   assert.equal(seq.snapshot().phase, 'connected')
   await seq.destroy()
 })
@@ -1437,7 +1438,7 @@ test('起動時に何度か開けなくても、開けたら SKRESET から始�
   // そのモジュールには SFE 0・鍵・S2/S3 が入っていない。
   const { seq, transport, logs } = build({ fail: { open: 2 } }, { maxRetryDelayMs: 50 })
   await seq.start()
-  await waitReady(seq, 10000, logs)
+  await waitReady(seq, null, logs)
   const iReset = transport.sent.findIndex((c) => /^SKRESET/.test(c))
   const iScan = transport.sent.findIndex((c) => /^SKSCAN/.test(c))
   assert.ok(iReset >= 0 && iReset < iScan, 'SKSCAN より先に SKRESET を撃つこと (SKRESET=' + iReset + ' SKSCAN=' + iScan + ')')
@@ -1533,7 +1534,7 @@ test('measurement に purpose（要求の目的）を載せる: poll・manual・
     seq.on('measurement', (r) => got.push([r.purpose, r.values.map((v) => v.epc)]))
     await transport.open()
     seq.start()
-    await waitReady(seq, 8000, logs)
+    await waitReady(seq, null, logs)
     await waitFor(() => got.some(([p]) => p === 'poll'), 3000, '接続直後の定期取得')
     assert.ok(got.some(([p]) => p === 'verify'), '疎通確認: ' + JSON.stringify(got))
     assert.ok(got.some(([p]) => p === 'once'), '接続時の一括取得')
@@ -1580,7 +1581,7 @@ test('フローの入力が ECHONET の待ち行列を埋めても、周期の�
   try {
     await transport.open()
     seq.start()
-    await waitReady(seq, 8000, logs)
+    await waitReady(seq, null, logs)
     const before = { reconnects: seq.state.counters.reconnects, joins: seq.state.counters.joins }
     // 応答が遅い（取得間隔の 3 倍より長い）間に、待ち行列が埋まったまま周期の取得が 3 回来る形。
     // 応答が 1 つでも届くと pollMisses は 0 に戻るので、それより前に 3 回断られる長さにする

@@ -11,6 +11,7 @@ const { Sequencer } = require('../lib/sequencer')
 const { SimulatorTransport } = require('../lib/simulator-transport')
 const SK = require('../lib/sk-protocol')
 const { holdEchonet } = require('./hold-echonet')
+const waitKit = require('./wait-kit')
 
 const ID = '0123456789ABCDEF0123456789ABCDEF'
 const PW = 'ABCDEF123456'
@@ -21,15 +22,11 @@ afterEach(async () => {
   for (const s of live.splice(0)) await s.destroy().catch(() => {})
 })
 
-// 待ちは単調な時計で測る。壁時計は飛ぶことがある
-async function waitFor(fn, ms, what) {
-  const limit = performance.now() + (ms || 5000)
-  while (performance.now() < limit) {
-    if (fn()) return true
-    await new Promise((r) => setTimeout(r, 10))
-  }
-  throw new Error('待ち時間を超えました: ' + (what || '条件'))
-}
+// 待ちの規則は test/wait-kit.js（単調な時計で測る・期限を過ぎても投げる前にもう一度見る・プロセスごと止まっていた間は数えない）
+const waitFor = (fn, ms, what) => waitKit.waitFor(fn, ms || 5000, what, 10)
+
+// 接続の待ち。負荷の下では数秒かかり、VM が数秒止まることもあるので長めにとる（通る試験の時間は変わらない）
+const READY_MS = 30000
 
 function build(simConfig, seqOptions) {
   const transport = new SimulatorTransport(Object.assign({ latencyMs: 1, joinMs: 10, scanTimeScale: 0.005, pairId: ID.slice(-8) }, simConfig))
@@ -64,11 +61,11 @@ function build(simConfig, seqOptions) {
 }
 
 async function ready(seq) {
-  await waitFor(() => seq.isConnected, 8000, '接続')
-  await waitFor(() => seq.snapshot().calibration.unitFactor !== null, 8000, '係数')
+  await waitFor(() => seq.isConnected, READY_MS, '接続')
+  await waitFor(() => seq.snapshot().calibration.unitFactor !== null, READY_MS, '係数')
   // 最初の定期取得まで待つ。待たないと、試験の途中でその取得が割り込んで数が 1 つずれる
-  await waitFor(() => seq.snapshot().known['0xE7'], 8000, '最初の取得')
-  await waitFor(() => seq._requestDepth === 0 && !seq._current && seq._queue.length === 0, 8000, '接続時の取得')
+  await waitFor(() => seq.snapshot().known['0xE7'], READY_MS, '最初の取得')
+  await waitFor(() => seq._requestDepth === 0 && !seq._current && seq._queue.length === 0, READY_MS, '接続時の取得')
 }
 
 function inject(transport, fail) {

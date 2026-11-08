@@ -6,9 +6,11 @@
 // 本物の Node-RED が入っていない環境（ふつうの開発機）では、呼ぶ側の試験を飛ばす（skip）。流し方は呼ぶ側の冒頭に書いてある。
 
 const fs = require('node:fs')
+const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
+const waitKit = require('../wait-kit')
 
 function findHome() {
   for (const dir of [process.env.WSUHA_TEST_NODE_RED, '/usr/src/node-red']) {
@@ -29,15 +31,11 @@ const skip = HOME ? false : '本物の Node-RED が無い環境では流しま�
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// 時計は単調な時計で測る（壁時計は飛ぶことがあり、飛ぶと待ちが早く切れる）
+// 待ちの規則は test/wait-kit.js（単調な時計で測る・期限を過ぎても投げる前にもう一度見る・プロセスごと止まっていた間は数えない）
 async function until(fn, what, ms) {
-  const end = performance.now() + (ms || 15000)
-  for (;;) {
-    const v = await fn()
-    if (v) return v
-    if (performance.now() > end) throw new Error(what + ' が時間内に起きませんでした')
-    await sleep(100)
-  }
+  const r = await waitKit.poll(fn, ms || 15000, 100)
+  if (!r.ok) throw new Error(what + ' が時間内に起きませんでした')
+  return r.value
 }
 
 /**
@@ -66,20 +64,35 @@ async function boot(flows, opt) {
     child.on('exit', (c) => reject(new Error('Node-RED が起動しませんでした（' + c + '）')))
   })
   const base = `http://127.0.0.1:${ready.port}`
-  async function j(method, url, body, headers) {
-    const r = await fetch(base + url, {
-      method,
-      headers: Object.assign(body === undefined ? {} : { 'content-type': 'application/json' }, headers),
-      body: body === undefined ? undefined : JSON.stringify(body),
+  // 要求ごとに接続を張り直す（http.request の agent: false。keep-alive の接続を使い回さない）。
+  // fetch（undici）では、プロセスごと止まりが明けた直後の要求が「fetch failed」（cause は UND_ERR_SOCKET: other side closed か ECONNRESET）で
+  // 落ちた（Node 18 のコンテナを 10 秒止めて確かめた）。止まりの間に Node-RED の側の keep-alive の期限（Node の http の既定は 5 秒）が過ぎ、
+  // 明けた直後にサーバーが閉じる接続へ、undici が次の要求を載せる。試験が見たいのは Node-RED の応答なので、使い回しの都合で落とさない
+  function j(method, url, body, headers) {
+    const payload = body === undefined ? null : Buffer.from(JSON.stringify(body))
+    const h = Object.assign(payload ? { 'content-type': 'application/json' } : {}, headers)
+    if (payload) h['content-length'] = payload.length
+    return new Promise((resolve, reject) => {
+      const req = http.request(base + url, { method, headers: h, agent: false }, (res) => {
+        const chunks = []
+        res.on('data', (c) => chunks.push(c))
+        res.on('error', reject)
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8')
+          let data = text
+          try {
+            data = JSON.parse(text)
+          } catch (e) {
+            /* 文字のまま */
+          }
+          const hs = new Headers()
+          for (const [k, v] of Object.entries(res.headers)) for (const x of [].concat(v)) hs.append(k, x)
+          resolve({ status: res.statusCode, body: data, text, headers: hs })
+        })
+      })
+      req.on('error', reject)
+      req.end(payload || undefined)
     })
-    const text = await r.text()
-    let data = text
-    try {
-      data = JSON.parse(text)
-    } catch (e) {
-      /* 文字のまま */
-    }
-    return { status: r.status, body: data, text, headers: r.headers }
   }
   return {
     version: ready.version,

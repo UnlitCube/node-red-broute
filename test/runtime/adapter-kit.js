@@ -60,16 +60,30 @@ function makeAdapter(registry, id, opts) {
   return { h, seq, transport }
 }
 
+/**
+ * ポートを開いて動かし、接続時の一括取得まで済むのを待つ。
+ * 繋がらずに投げるときは、その sequencer を止めてから投げる。回ったままの sequencer を残すと、強制終了の無い Node 18 では
+ * 試験のファイルが終わらず、run-all が全体の上限まで待つ（呼ぶ側の後始末が connect より後ろにあっても残さない）。
+ */
 async function connect(seq, ms) {
-  await seq.transport.open()
-  seq.start()
-  await waitReady(seq, ms)
+  try {
+    await seq.transport.open()
+    seq.start()
+    await waitReady(seq, ms)
+  } catch (e) {
+    await seq.destroy().catch(() => {})
+    throw e
+  }
 }
+
+// 接続の待ち。通る試験でも負荷の下では 1〜6 秒かかり、VM や共有フォルダが数秒止まることもあるので、上限は長めにとる
+// （起きないまま止まらないための上限で、通る試験の時間は変わらない）
+const READY_MS = 30000
 
 async function waitReady(seq, ms) {
-  await waitFor(() => seq.isConnected, ms || 8000, '接続')
-  await waitFor(() => seq.snapshot().calibration.unitFactor !== null, ms || 8000, '係数の取得')
-  await waitFor(() => seq._requestDepth === 0 && !seq._current && seq._queue.length === 0, ms || 8000, '接続時の一括取得')
+  await waitFor(() => seq.isConnected, ms || READY_MS, '接続')
+  await waitFor(() => seq.snapshot().calibration.unitFactor !== null, ms || READY_MS, '係数の取得')
+  await waitFor(() => seq._requestDepth === 0 && !seq._current && seq._queue.length === 0, ms || READY_MS, '接続時の一括取得')
 }
 
-module.exports = { makeAdapter, connect, waitReady }
+module.exports = { makeAdapter, connect, waitReady, READY_MS }

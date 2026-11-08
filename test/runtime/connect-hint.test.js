@@ -4,7 +4,7 @@
 // 部品ごとの試験は緑でも、配線の途中で値が落ちると案内は出ない。
 // 案内を立てる規則そのものは test/sequencer-recovery.test.js。
 
-const { test } = require('node:test')
+const { test, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { createRegistry } = require('../../lib/runtime/registry')
 const vm = require('../../lib/runtime/view-model')
@@ -14,7 +14,15 @@ const { waitFor } = require('./fake-red')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const summaryOf = (h) => vm.buildSummary(h.inspect(), Date.now())
 
+// 試験が途中で落ちても片付ける。繋がらないまま回る sequencer を残すと、Node 18 では試験のファイルが終わらない
+const live = []
+afterEach(async () => {
+  for (const s of live.splice(0)) await s.destroy().catch(() => {})
+})
+
+/** 後始末の一覧に載せてから動かす。 */
 async function start(seq) {
+  live.push(seq)
   await seq.transport.open()
   seq.start()
 }
@@ -80,6 +88,7 @@ test('serialport を読み込めない台: 本物の Sequencer を通っても c
   transport.open = async () => {
     throw miss
   }
+  live.push(seq)
   seq.start()
   await waitFor(() => summaryOf(h).portOpen === false && h.inspect().snap.lastError, 5000, '直近のエラー')
   const s = summaryOf(h)

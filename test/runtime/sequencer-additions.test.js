@@ -2,7 +2,7 @@
 
 // lib/sequencer.js に足した 2 つ: setBaseline(partial) と diagRead(command)。
 
-const { test } = require('node:test')
+const { test, afterEach } = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
 const { Sequencer } = require('../../lib/sequencer')
@@ -10,8 +10,15 @@ const { createRegistry } = require('../../lib/runtime/registry')
 const { makeAdapter, connect } = require('./adapter-kit')
 const { ID, PW, waitFor } = require('./fake-red')
 
+// 試験が途中で落ちても片付ける。回ったままの sequencer を残すと、Node 18 では試験のファイルが終わらない
+const live = []
+afterEach(async () => {
+  for (const s of live.splice(0)) await s.destroy().catch(() => {})
+})
+
 test('setBaseline は基準と効いている値の両方を変え、再接続しない', async () => {
   const { seq, transport } = makeAdapter(createRegistry(), 'sb1', { seq: { pollIntervalSec: 30, minTierIntervalSec: 1 } })
+  live.push(seq)
   await connect(seq)
   const sentBefore = transport.sent.length
   const reconnects = seq.state.counters.reconnects
@@ -71,6 +78,7 @@ test('下限で丸める・空や不正な値は無視する', async () => {
 
 test('diagRead は許可したコマンドだけを送り、受け取った行を返す', async () => {
   const { seq, transport } = makeAdapter(createRegistry(), 'dr1')
+  live.push(seq)
   await connect(seq)
   const rawListeners = seq.listenerCount('raw')
   const info = await seq.diagRead('skinfo')

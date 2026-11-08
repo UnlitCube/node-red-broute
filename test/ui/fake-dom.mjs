@@ -25,6 +25,7 @@
 // 張り方は Preact の既定と同じ（描画はマイクロタスク、useEffect は 35ms の setTimeout のあとの setTimeout）なので、順は変わらない。
 
 import { options as preactOptions } from '../../ui/vendor/preact.mjs'
+import waitKit from '../wait-kit.js'
 
 const HTML_NS = 'http://www.w3.org/1999/xhtml'
 
@@ -577,13 +578,11 @@ export async function settle(rounds = 2) {
 
 /**
  * cond が真になるまで待つ。起きるはずの変化は、これで見る（描画の外の仕事、たとえば偽のサーバーの応答の後も待てる）。
- * 時計は単調な時計で測る（壁時計は飛ぶことがあり、飛ぶと待ちが早く切れる）。
+ * 待ちの規則は test/wait-kit.js（単調な時計で測る・期限を過ぎても最後にもう一度見る・プロセスごと止まっていた間は数えない）。
  * @returns {Promise<boolean>} 最後の cond の値
  */
 export async function until(cond, ms = 5000) {
-  const end = performance.now() + ms
-  while (!cond() && performance.now() < end) await new Promise((r) => setTimeout(r, 15))
-  return cond()
+  return (await waitKit.poll(cond, ms, 15)).value
 }
 
 /** vnode を document.body の下に描く。 */

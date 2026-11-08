@@ -101,9 +101,13 @@ function out2(node, topic) {
   return node._sent.filter((m) => Array.isArray(m) && m[1] && (!topic || m[1].topic === topic)).map((m) => m[1])
 }
 
+// 接続の待ち。通る試験でも負荷の下では 1〜6 秒かかり、VM や共有フォルダが数秒止まることもあるので、上限は長めにとる
+// （起きないまま止まらないための上限で、通る試験の時間は変わらない。後始末は作ったときに open へ載せてある）
+const CONNECT_MS = 30000
+
 async function connected(dev) {
-  await waitFor(() => dev.sequencer && dev.sequencer.isConnected, 8000, '接続')
-  await waitFor(() => dev.sequencer._requestDepth === 0 && !dev.sequencer._pending, 8000, '接続時の取得')
+  await waitFor(() => dev.sequencer && dev.sequencer.isConnected, CONNECT_MS, '接続')
+  await waitFor(() => dev.sequencer._requestDepth === 0 && !dev.sequencer._pending, CONNECT_MS, '接続時の取得')
 }
 
 module.exports = { createKit, input, out2, connected, SIM }
