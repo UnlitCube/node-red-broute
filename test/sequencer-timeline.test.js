@@ -50,6 +50,10 @@ global.clearTimeout = removeTimer
 global.setInterval = (fn, ms, ...args) => addTimer(fn, ms, args, true)
 global.clearInterval = removeTimer
 Date.now = () => now
+// シミュレーターは行を出す時刻を単調な時計（performance.now）で数える。これも仮想の時計にそろえないと、
+// 仮想のタイマーが動いても「まだ出す時刻でない」と見て、実時間が追いつくまで行が出ない。
+// Node 18 は代入では差し替わらないので defineProperty で置く
+Object.defineProperty(performance, 'now', { value: () => now - START, configurable: true, writable: true })
 
 const flush = () => new Promise((r) => realImmediate(r))
 

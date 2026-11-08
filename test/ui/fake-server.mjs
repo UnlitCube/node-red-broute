@@ -84,10 +84,13 @@ export function json(status, body) {
 
 export const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
-/** cond が真になるまで待つ（npm test の並列で遅くなっても落ちないよう、上限は長め）。 */
+/**
+ * cond が真になるまで待つ（npm test の並列で遅くなっても落ちないよう、上限は長め）。
+ * 時計は単調な時計で測る（壁時計は飛ぶことがあり、Docker の VM では 30 秒ごとに 1 秒ほど進む。進むと待ちが早く切れる）。
+ */
 export async function until(cond, ms = 3000) {
-  const end = Date.now() + ms
-  while (!cond() && Date.now() < end) await wait(20)
+  const end = performance.now() + ms
+  while (!cond() && performance.now() < end) await wait(20)
   return cond()
 }
 

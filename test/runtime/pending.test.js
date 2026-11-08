@@ -83,14 +83,15 @@ test('未接続のあいだに来たものは預かり、つながったら来�
 test('待つ長さを過ぎたら NOT_CONNECTED（waitedMs つき）。0 秒なら待たない', { timeout: 10000 }, async () => {
   // 戻すと落ちるもの: 待ちの timer を張らない・waitedMs を付けない
   const { h } = adapter('p-timeout')
-  const t0 = Date.now()
+  // かかった長さは単調な時計で測る（壁時計は飛ぶことがあり、Docker の VM では 30 秒ごとに 1 秒ほど進む）
+  const t0 = performance.now()
   await assert.rejects(
     h.pending.submit({ kind: 'meter', label: 'get E7', timeoutMs: 150, run: async () => 'x' }),
     (err) => {
       assert.equal(err.code, 'NOT_CONNECTED')
       assert.equal(err.status, 503)
       assert.equal(typeof err.waitedMs, 'number')
-      assert.ok(err.waitedMs >= 140 && Date.now() - t0 >= 140, 'waitedMs: ' + err.waitedMs)
+      assert.ok(err.waitedMs >= 140 && performance.now() - t0 >= 140, 'waitedMs: ' + err.waitedMs)
       assert.match(err.message, /つながらないまま/)
       return true
     }
@@ -108,14 +109,14 @@ test('外部の指示で止めている（stop・terminate）・無効のとき�
   // 戻すと落ちるもの: pending.js の immediate で overrides.stopped・meta.enabled を見ない・kick で待っているものを見直さない
   const { h, seq } = adapter('p-stop')
   await seq.stop('点検', { external: true })
-  const t0 = Date.now()
+  const t0 = performance.now()
   await assert.rejects(h.pending.submit({ kind: 'meter', label: 'get', timeoutMs: 5000, run: async () => 'x' }), (err) => {
     assert.equal(err.code, 'STOPPED_BY_OVERRIDE')
     assert.equal(err.status, 409)
     assert.match(err.message, /点検/)
     return true
   })
-  assert.ok(Date.now() - t0 < 1000, '待たない')
+  assert.ok(performance.now() - t0 < 1000, '待たない')
   // 待っている間に止めた
   await seq.start()
   const w = track(h.pending.submit({ kind: 'meter', label: 'get', timeoutMs: 5000, run: async () => 'x' }))
@@ -324,11 +325,11 @@ test('つながっているあいだは、前のものの実行が長引いて�
   const g2 = track(h.pending.submit({ kind: 'meter', label: 'get E7', timeoutMs: 300, run: (s) => s.get([0xe7], 'manual') }))
   await new Promise((r) => setTimeout(r, 400))
   assert.equal(g2.done, false, 'つながっている間の 400 ms は数えない')
-  const t0 = Date.now()
+  const t0 = performance.now()
   await seq.transport.close()
   await waitFor(() => g2.done, 3000, 'ポートが閉じたあとの待つ長さ')
   assert.equal(g2.err.code, 'NOT_CONNECTED')
-  assert.ok(Date.now() - t0 >= 250, '閉じてから待つ長さぶん待った: ' + (Date.now() - t0))
+  assert.ok(performance.now() - t0 >= 250, '閉じてから待つ長さぶん待った: ' + (performance.now() - t0))
   assert.ok(g2.err.waitedMs >= 650, 'waitedMs は届いてからの長さ: ' + g2.err.waitedMs)
   release2('late')
   await waitFor(() => slow2.done, 3000)

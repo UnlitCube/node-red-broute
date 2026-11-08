@@ -234,9 +234,10 @@ test('待つ長さを過ぎたら NOT_CONNECTED（waitedMs）と done(err)。msg
   createDevice(fake, 'hd-wait', { simulatorOptions: absentSim() })
   const b = createBroute(fake, 'hd-wait', { waitSec: 0.3 })
   const b2 = createBroute(fake, 'hd-wait')
-  const t0 = Date.now()
+  // かかった長さは単調な時計で測る（壁時計は飛ぶことがあり、Docker の VM では 30 秒ごとに 1 秒ほど進む）
+  const t0 = performance.now()
   const r = await input(b, { topic: 'get', payload: 'E7' })
-  assert.ok(Date.now() - t0 >= 280, 'ノードの設定の 0.3 秒は待つ')
+  assert.ok(performance.now() - t0 >= 280, 'ノードの設定の 0.3 秒は待つ')
   assert.ok(r.err)
   const e = r.sent.find((x) => x[1] && x[1].topic === 'error')[1].payload
   assert.equal(e.code, 'NOT_CONNECTED')
@@ -246,9 +247,9 @@ test('待つ長さを過ぎたら NOT_CONNECTED（waitedMs）と done(err)。msg
   assert.equal(typeof e.ts, 'string', 'ts は ISO の文字列（1.x のまま）')
   assert.deepEqual(JSON.parse(JSON.stringify(e)), e)
   // msg.timeoutSec が優先（既定 120 秒のノードでも）
-  const t1 = Date.now()
+  const t1 = performance.now()
   const r2 = await input(b2, { topic: 'diag', payload: { name: 'epc', args: { epcs: ['E7'] } }, timeoutSec: 0.2 })
-  assert.ok(Date.now() - t1 < 3000)
+  assert.ok(performance.now() - t1 < 3000)
   assert.equal(r2.sent.find((x) => x[1] && x[1].topic === 'error')[1].payload.code, 'NOT_CONNECTED')
   // 読めない timeoutSec は VALIDATION
   const r3 = await input(b2, { topic: 'get', payload: 'E7', timeoutSec: -1 })
@@ -266,7 +267,7 @@ test('外部の指示で止めているとき（stop・terminate）は待たず�
   const b = createBroute(fake, 'hd-stop')
   await connected(dev)
   await input(b, { topic: 'stop', payload: { reason: '点検中' } })
-  const t0 = Date.now()
+  const t0 = performance.now()
   for (const msg of [{ topic: 'get', payload: 'E7' }, { topic: 'poll' }, { topic: 'read', payload: { maxAgeSec: 0 } }, { topic: 'diag', payload: { name: 'propmap' } }]) {
     const r = await input(b, msg)
     assert.ok(r.err, msg.topic)
@@ -274,7 +275,7 @@ test('外部の指示で止めているとき（stop・terminate）は待たず�
     assert.equal(e.code, 'STOPPED_BY_OVERRIDE', msg.topic)
     assert.match(e.message, /点検中/)
   }
-  assert.ok(Date.now() - t0 < 2000, '待たない')
+  assert.ok(performance.now() - t0 < 2000, '待たない')
   // モジュールだけで答えるコマンドは、ポートが開いていれば止めていても答える（接続を待たない）
   const c = await input(b, { topic: 'command', payload: 'SKVER' })
   assert.equal(c.err, null)
@@ -467,11 +468,11 @@ test('GET adapters/:id/read: maxAgeSec なしは無線を使わない。取り�
   await dev.sequencer.stop('試験', { external: false })
   dev.sequencer.state.connected = false
   dev.sequencer._setPhase('idle', '試験')
-  const t0 = Date.now()
+  const t0 = performance.now()
   const down = await fake.request('GET', `${B}/adapters/api-read/read?epcs=E7&maxAgeSec=0`, { headers: RADIO })
   assert.equal(down.statusCode, 503, down.text)
   assert.equal(down.body.error.code, 'NOT_CONNECTED')
-  assert.ok(Date.now() - t0 < 1000)
+  assert.ok(performance.now() - t0 < 1000)
   assertNoSecrets(JSON.stringify([r.body, all.body, age.body]), 'API の応答')
 })
 

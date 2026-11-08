@@ -17,8 +17,35 @@
 // 要素を assert.equal / deepEqual にそのまま渡さない（assert.equal(!!$(root, sel), false) のように真偽にする）。
 // 失敗したとき AssertionError が要素を customInspect なし・深さ 1000 で調べ、循環した DOM 全体をたどって止まる
 // （1 件の失敗が 90 秒以上終わらないことがある）。
+//
+// settle() は決まった時間を待ったあと、Preact の描画と useEffect が残っていれば、無くなるまで待ち足す。
+// 並列で流して CPU が足りないと、「送る → 誤りを描く → 詳細設定を開く（useEffect）→ 開いたあとでフォーカス（useEffect）」の
+// ような連なりが決まった時間に収まらず、途中の状態を見て赤になる。「動かない」ことを見る試験も、連なりが終わる前に見ると
+// 守れていないのに緑になる。そこで描画（options.debounceRendering）と useEffect の flush（options.requestAnimationFrame）を数える。
+// 張り方は Preact の既定と同じ（描画はマイクロタスク、useEffect は 35ms の setTimeout のあとの setTimeout）なので、順は変わらない。
+
+import { options as preactOptions } from '../../ui/vendor/preact.mjs'
 
 const HTML_NS = 'http://www.w3.org/1999/xhtml'
+
+/** まだ済んでいない Preact の描画と useEffect の flush の数。 */
+let preactPending = 0
+preactOptions.debounceRendering = (run) => {
+  preactPending++
+  Promise.resolve().then(() => {
+    preactPending--
+    run()
+  })
+}
+preactOptions.requestAnimationFrame = (flush) => {
+  preactPending++
+  setTimeout(() => {
+    setTimeout(() => {
+      preactPending--
+      flush()
+    })
+  }, 35)
+}
 
 class FakeNode {
   constructor(doc, nodeType) {
@@ -536,18 +563,26 @@ export function installDom({ href = 'http://127.0.0.1:3985/wsuha-broute/ui/', wi
   return installed
 }
 
-/** Preact の描画（マイクロタスク）と useEffect（requestAnimationFrame が無いときは 35ms の setTimeout）を待つ。 */
+/**
+ * Preact の描画（マイクロタスク）と useEffect（35ms の setTimeout）を待つ。決まった時間（45ms × rounds）のあと、
+ * 描画か useEffect が残っていれば、無くなるまで待ち足す（上限 3 秒。周期で描き直す画面でも先へ進む）。
+ * 見るのはタイマーの合間だけでよい。連なりの中では、flush の中の setState や描画の中の useEffect が、数が 0 に戻るのと
+ * 同じ同期の処理の中で次を数えるので、合間に 0 と見えたら Preact の仕事は残っていない。
+ */
 export async function settle(rounds = 2) {
   for (let i = 0; i < rounds; i++) await new Promise((r) => setTimeout(r, 45))
+  const limit = performance.now() + 3000
+  while (preactPending > 0 && performance.now() < limit) await new Promise((r) => setTimeout(r, 5))
 }
 
 /**
- * cond が真になるまで待つ。起きるはずの変化は、これで見る。並列で流すと useEffect の番が遅れるので、settle の決まった時間では足りないことがある。
+ * cond が真になるまで待つ。起きるはずの変化は、これで見る（描画の外の仕事、たとえば偽のサーバーの応答の後も待てる）。
+ * 時計は単調な時計で測る（壁時計は飛ぶことがあり、飛ぶと待ちが早く切れる）。
  * @returns {Promise<boolean>} 最後の cond の値
  */
 export async function until(cond, ms = 5000) {
-  const end = Date.now() + ms
-  while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 15))
+  const end = performance.now() + ms
+  while (!cond() && performance.now() < end) await new Promise((r) => setTimeout(r, 15))
   return cond()
 }
 

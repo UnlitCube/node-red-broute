@@ -353,11 +353,21 @@ test('公開の面（generation・isRunning・isEchonetBusy・queueLength・curr
   seq._current = { command: 'SKSETPWD C ' + PW }
   assert.equal(seq.currentCommand(), 'SKSETPWD C ********')
   seq._current = null
-  // pollNow は今すぐの取得を張る
+  // pollNow は今すぐの取得を張る。取得の途中かどうかは、その取得の SKSENDTO を送る瞬間に見る。
+  // シミュレーターでは取得の途中（送ってから OK・応答・EVENT 21 を読むまで）が 50ms ほどしかない。
+  // 間を空けて isEchonetBusy を見張ると、CPU が足りずにイベントループが 50ms を超えて止まったとき、
+  // 止まっている間に全部が届いて途中を一度も見ないまま待ちが切れる（送った直後に 80ms 止めると再現する）
+  const busyAtSend = []
+  const onLog = (l) => {
+    if (l.level === 'tx' && /SKSENDTO/.test(l.text)) busyAtSend.push(seq.isEchonetBusy())
+  }
+  seq.on('log', onLog)
   seq.pollNow()
   assert.ok(seq._pollTimer)
-  await waitFor(() => seq.isEchonetBusy(), 2000, '今すぐの取得')
+  await waitFor(() => busyAtSend.length > 0, 2000, '今すぐの取得')
   await waitFor(() => !seq.isEchonetBusy(), 4000, '取得が終わる')
+  seq.removeListener('log', onLog)
+  assert.equal(busyAtSend[0], true, '取得の途中は isEchonetBusy')
   // reconnect で世代が進む
   await seq.reconnect('試験')
   assert.ok(seq.generation > g)

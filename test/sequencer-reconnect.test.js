@@ -10,6 +10,7 @@ const assert = require('node:assert/strict')
 const { Sequencer } = require('../lib/sequencer')
 const { SimulatorTransport } = require('../lib/simulator-transport')
 const SK = require('../lib/sk-protocol')
+const { holdEchonet } = require('./hold-echonet')
 
 const ID = '0123456789ABCDEF0123456789ABCDEF'
 const PW = 'ABCDEF123456'
@@ -29,8 +30,6 @@ async function waitFor(fn, ms, what) {
   }
   throw new Error('待ち時間を超えました: ' + (what || '条件'))
 }
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function build(simConfig, seqOptions) {
   const transport = new SimulatorTransport(Object.assign({ latencyMs: 1, joinMs: 10, scanTimeScale: 0.005, pairId: ID.slice(-8) }, simConfig))
@@ -113,7 +112,10 @@ test('送り直しても応答が無ければ取りこぼし 1 回。待つ長�
 })
 
 test('responseResends: 0 なら送り直さない。応答の待ちは sendTimeout を超えない', async () => {
-  const { seq, transport } = build({}, { responseResends: 0, sendTimeout: 80, responseTimeoutMs: 100000 })
+  // sendTimeout は SKSENDTO の OK と EVENT 21 の待ちにも使う。数十 ms にすると、CPU が足りないときに OK が間に合わず
+  // 送信の再試行（同じ TID）が起き、2 回目の SKSENDTO には応答が返って、取りこぼしにならないまま通る。
+  // 応答の待ちが responseTimeoutMs（100 秒）でなく sendTimeout で切れることは、1.5 秒でも 5 秒の線で見分けられる
+  const { seq, transport } = build({}, { responseResends: 0, sendTimeout: 1500, responseTimeoutMs: 100000 })
   await seq.start()
   await ready(seq)
   inject(transport, { noEchonetResponse: 1 })
@@ -126,25 +128,40 @@ test('responseResends: 0 なら送り直さない。応答の待ちは sendTimeo
 
 // 戻すと落ちるもの: _pending.tids で照らさない（前の TID の応答を捨てて 2 回目を待つ）・_lateTids を外す（同じ値が 2 回出る）
 test('応答が遅れても、先に届いた方を使い、もう片方は出さない', async () => {
-  // 応答は 1 回目の待ちが切れて送り直したあと、2 回目の待ちが切れる前に届く。
-  // 待ちと応答の遅れの差が小さいと、負荷が高いときに順番が入れ替わるので、どちらも大きく空ける
-  const { seq, transport } = build({ echonetDelayMs: 900 }, { responseTimeoutMs: 600 })
+  // 1 回目の応答は、1 回目の待ちが切れて送り直したあと（2 回目の待ちが切れる前）に届け、送り直した方の応答はそのあとに届ける。
+  // この順を応答の遅れ（echonetDelayMs）と待ちの長さの差で作ると、CPU が足りないときに待ちの張り始めが後ろへずれ、
+  // 1 回目の応答が待ちの切れる前に届いて、送り直さないまま進む（順が入れ替わる）。そこで応答を預かり、届ける順を試験が決める
+  const { seq, transport } = build({}, { responseTimeoutMs: 600 })
   await seq.start()
   await ready(seq)
   const seen = []
   seq.on('measurement', (m) => m.purpose === 'test' && seen.push(m))
-  const recovered = seq.snapshot().counters.resendRecovered // 接続時の取得でも送り直している
-  const r = await seq.get([0xe7], 'test')
+  let erxudp = 0
+  seq.on('sk', (e) => e.kind === 'erxudp' && erxudp++)
+  const recovered = seq.snapshot().counters.resendRecovered
+  const sendtos = () => transport.sent.filter((c) => /^SKSENDTO/.test(c)).length
+  const before = sendtos()
+  const hold = holdEchonet(transport)
+  const p = seq.get([0xe7], 'test')
+  // 2 本目を預かった = 1 回目の待ちが切れて送り直した
+  await waitFor(() => hold.count === 2, 5000, '待ちが切れて送り直す')
+  assert.equal(sendtos(), before + 2, '同じ EPC を 1 回だけ送り直した')
+  hold.release(0) // 1 回目の要求への応答（前の TID）
+  const r = await p
   assert.equal(r.values[0].epc, 0xe7)
-  await sleep(1000) // 送り直した方の応答が届くまで
+  const got = erxudp
+  hold.release(1) // 送り直した方の応答
+  await waitFor(() => erxudp > got, 2000, '送り直した方の応答が届く')
   assert.equal(seen.length, 1, '同じ値を二度出さない')
   assert.equal(seq.snapshot().counters.resendRecovered, recovered + 1)
-  assert.ok(transport.sent.filter((c) => /^SKSENDTO/.test(c)).length >= 2)
+  hold.stop()
   await seq.destroy()
 })
 
 test('履歴（E2 など）は長く待ち、送り直さない', async () => {
-  const { seq, transport } = build({}, { bulkySendTimeout: 120, responseTimeoutMs: 20 })
+  // bulkySendTimeout は履歴の SKSENDTO の OK と EVENT 21 の待ちにも使う。百 ms ほどだと、CPU が足りないときに
+  // 送信の再試行が起きて SKSENDTO が 2 回になる（送り直しと見分けられない）。応答の待ちの responseTimeoutMs（20ms）より十分長くする
+  const { seq, transport } = build({}, { bulkySendTimeout: 1500, responseTimeoutMs: 20 })
   await seq.start()
   await ready(seq)
   inject(transport, { noEchonetResponse: 1 })

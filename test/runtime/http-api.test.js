@@ -14,6 +14,7 @@ const { createRegistry } = require('../../lib/runtime/registry')
 const { createSettingsStore } = require('../../lib/runtime/settings-store')
 const { createFakeRed, FakeRes, parseSse, waitFor, tmpDir, ID, PW } = require('./fake-red')
 const { makeAdapter, connect } = require('./adapter-kit')
+const { holdEchonet } = require('../hold-echonet')
 
 const B = '/wsuha-broute/api/v1'
 const IDHINT = ID.slice(0, 4) + '…' + ID.slice(-4)
@@ -300,12 +301,12 @@ test('本文の上限: 超えたら本文の終わりを待たずに断る（終
   const req = new Readable({ read() {} })
   req.headers = {}
   req.push(Buffer.alloc(70 * 1024, 0x20)) // 64 KB を超える。終わり（push(null)）は来ない
-  const t0 = Date.now()
+  const t0 = performance.now() // かかった長さは単調な時計で（壁時計は飛ぶことがある）
   await assert.rejects(
     () => withTimeout(parseJsonBody(req), 2000, '本文の読み取り'),
     (e) => e.code === 'VALIDATION' && /大きすぎます/.test(e.message)
   )
-  assert.ok(Date.now() - t0 < 1500, '終わりを待たずに断る')
+  assert.ok(performance.now() - t0 < 1500, '終わりを待たずに断る')
   req.destroy()
 })
 
@@ -396,8 +397,10 @@ test('actions/poll: 取得の途中は 409 BUSY。連打しても取りこぼし
   // 1.5 秒かかる応答の間に何度も押すと、押した数だけ _poll() が積まれ、待ち行列（4）から溢れた分が
   // 「応答なし」に数えられて、3 回で PANA の初回認証からやり直していた
   const { fake, a, dispose } = await lonelyAdapter('spam')
+  // 押している間は取得の途中のままにする。応答の遅れ（以前は 800ms）の間に 10 回押し切る形だと、CPU が足りないときに
+  // 押し終わる前に応答が届き、途中の回が 200 になる（壁時計の飛びでシミュレーターの応答が早まったときも同じだった）
+  const hold = holdEchonet(a.transport)
   try {
-    a.transport.config.echonetDelayMs = 800 // 実機に近い応答の遅さ
     const before = { reconnects: a.seq.state.counters.reconnects, joins: a.seq.state.counters.joins }
     const statuses = []
     let maxMisses = 0
@@ -409,6 +412,8 @@ test('actions/poll: 取得の途中は 409 BUSY。連打しても取りこぼし
       maxDepth = Math.max(maxDepth, a.seq._requestDepth)
       await new Promise((res) => setTimeout(res, 20)) // 人が連打する程度の間隔
     }
+    assert.ok(hold.count >= 1, '押している間に取得を送った')
+    hold.releaseAll() // 押し終わってから応答を届ける
     await waitFor(() => a.seq._requestDepth === 0 && !a.seq._pending, 5000, '取得が終わる')
     const logs = a.h.logsAfter({ after: 0, limit: 1000 }).items.map((x) => x.text)
     assert.equal(maxMisses, 0, '取りこぼしに数えない')
@@ -423,6 +428,7 @@ test('actions/poll: 取得の途中は 409 BUSY。連打しても取りこぼし
     assert.equal(busy.statusCode, 200, busy.text)
     assert.match(busy.body.message, /今すぐ取得します/)
   } finally {
+    hold.stop()
     await dispose()
   }
 })

@@ -29,12 +29,13 @@ const skip = HOME ? false : '本物の Node-RED が無い環境では流しま�
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// 時計は単調な時計で測る（壁時計は飛ぶことがあり、飛ぶと待ちが早く切れる）
 async function until(fn, what, ms) {
-  const end = Date.now() + (ms || 15000)
+  const end = performance.now() + (ms || 15000)
   for (;;) {
     const v = await fn()
     if (v) return v
-    if (Date.now() > end) throw new Error(what + ' が時間内に起きませんでした')
+    if (performance.now() > end) throw new Error(what + ' が時間内に起きませんでした')
     await sleep(100)
   }
 }

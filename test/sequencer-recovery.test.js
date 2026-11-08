@@ -122,6 +122,40 @@ test('イベントループが遅れても、シミュレーターの行は出�
   await transport.close()
 })
 
+// 戻すと落ちるもの: _later・_armOutbox・_drainOutbox の時刻を Date.now に戻す
+// （進むと 400ms 先の行がすぐ出る行と一緒に出る・戻ると 1 時間止まる）
+test('壁時計が進んでも戻っても、シミュレーターの行は決めた遅れで届く（早まらない・止まらない）', async () => {
+  // Docker の VM では Date.now が 30 秒ごとに 1 秒ほど進む。NTP で時刻を合わせたときは戻ることもある
+  const realNow = Date.now
+  let shift = 0
+  const transport = new SimulatorTransport({ latencyMs: 1 })
+  await transport.open()
+  await sleep(5)
+  const got = []
+  transport.on('line', (b) => got.push({ text: b.toString('latin1').trim(), at: performance.now() }))
+  const arrived = (text) => got.find((g) => g.text === text)
+  try {
+    Date.now = () => realNow() + shift
+    // 進む: 400ms 先の行を張ってから壁時計を 5 秒進め、すぐ出す行を足す（足すと出す順の箱が張り直される）。
+    // 見るのは届いた時刻だけ（CPU が足りずに 400ms 止まれば、正しくても 2 行は一緒に届く）
+    const t0 = performance.now()
+    transport._emitLine('LATE', 400)
+    shift = 5000
+    transport._emitLine('SOON', 1)
+    await waitFor(() => arrived('LATE'), 3000, '400ms 先の行')
+    assert.ok(arrived('SOON'), 'すぐ出す行も届いた')
+    const lateMs = Math.round(arrived('LATE').at - t0)
+    assert.ok(lateMs >= 395, `壁時計が進んだだけで、400ms 先の行が ${lateMs}ms で出た`)
+    // 戻る: 50ms 先の行を張ってから壁時計を 1 時間戻す
+    transport._emitLine('BACK', 50)
+    shift -= 3600 * 1000
+    await waitFor(() => arrived('BACK'), 3000, '壁時計が戻ったあとの 50ms 先の行')
+  } finally {
+    Date.now = realNow
+    await transport.close()
+  }
+})
+
 // ---- 送信の失敗の code ------------------------------------------------------------------------
 
 // 戻すと落ちるもの: _matchCurrent の UDP 送信失敗の CommandError から code を外す（API が 500 INTERNAL になる）

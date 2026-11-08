@@ -6,6 +6,8 @@ Wi-SUN USB アダプタを使って、日本の低圧スマートメーターか
 - 接続・再試行・再接続は、ノードが自動で行います。フローの側は、流れてくる値を受け取るだけです。
 - 状態の確認・設定・診断ができる Web UI を同梱しています。ダッシュボードを作る必要はありません。
 
+![Web UI。左にアダプタの一覧（瞬時電力・瞬時電流・電波の強さ）、右に選んだアダプタの接続の段階とメーターの情報](https://raw.githubusercontent.com/UnlitCube/node-red-broute/main/images/webui-status.png)
+
 Reads Japanese low-voltage smart meters over the B-route with a Wi-SUN USB adapter (tested with RATOC RS-WSUHA only).
 The node handles joining, retries and reconnection, and outputs plain JSON. A built-in Web UI shows status and settings.
 The editor, the Web UI and this document are in Japanese only, because the B-route is a service for smart meters in Japan.
@@ -17,7 +19,7 @@ This is an unofficial package. It is not affiliated with or endorsed by RATOC Sy
 
 - [必要なもの](#必要なもの)
 - [5 分で試す](#5-分で試す)
-- [実機をつなぐ](#実機をつなぐ)
+- [セットアップ](#セットアップ)
 - [Web UI](#web-ui)
 - [フローの入出力](#フローの入出力)
 - [セキュリティと settings.js](#セキュリティと-settingsjs)
@@ -56,13 +58,14 @@ B ルートを使うには、お住まいの地域の一般送配電事業者（
 
 実機も B ルートの契約も要りません。シミュレーターの例を読み込むだけで動きます。
 
-1. Node-RED のメニューから「パレットの管理」→「ノードを追加」で `@unlitcube/node-red-broute` を入れます（`broute` か `wsuha` で探せます）。コマンドで入れるなら次のとおりです。
+1. Node-RED の userDir（ふつうは `~/.node-red`）で入れて、Node-RED を再起動します。
 
    ```bash
    cd ~/.node-red
-   npm install @unlitcube/node-red-broute
-   # そのあと Node-RED を再起動します
+   npm install github:UnlitCube/node-red-broute
    ```
+
+   npm にはまだ公開していないので、パレットの「ノードを追加」には出ません。GitHub から入れてください。
 
 2. メニューから「読み込み」→「サンプル」→ `flows` → `@unlitcube/node-red-broute` → `01-simulator` を選び、読み込みます。タブ「B ルート（シミュレーター）」が増えます。
 3. 「デプロイ」を押します。
@@ -79,11 +82,45 @@ B ルートを使うには、お住まいの地域の一般送配電事業者（
 
 ---
 
-## 実機をつなぐ
+## セットアップ
 
-### 1. シリアルポートを開けるようにする
+Raspberry Pi（Raspberry Pi OS）に入れて、実機のアダプタで計測を始めるまでの手順です。ほかの Linux・Windows・macOS でも、Node-RED が動けば流れは同じです。
 
-`serialport` はこのノードと一緒に入ります。ビルドできない環境では入らないことがあり、そのときは Web UI に入れ方を出します。
+### 1. Node-RED を入れる
+
+Raspberry Pi OS では、Node-RED の公式の手順（<https://nodered.org/docs/getting-started/raspberrypi>）のスクリプトで入れます。Node.js が入っていなければ、Node.js も一緒に入ります。
+
+```bash
+bash <(curl -sL https://github.com/node-red/linux-installers/releases/latest/download/install-update-nodered-deb)
+```
+
+ほかの環境は、公式の手順（<https://nodered.org/docs/getting-started/>）で入れてください。Node-RED 3.1 以上・Node.js 18 以上が要ります。
+
+### 2. このノードを入れる
+
+userDir（ふつうは `~/.node-red`）で入れて、Node-RED を再起動します。
+
+```bash
+cd ~/.node-red
+npm install github:UnlitCube/node-red-broute
+node-red-restart
+```
+
+`node-red-restart` は Raspberry Pi の公式の手順で入れたときのコマンドです。ほかの環境では、Node-RED を起動し直してください。シリアルポートを扱う `serialport` も一緒に入ります。Raspberry Pi（64 bit の Raspberry Pi OS）には組み立て済みのものが入るので、ビルドは要りません。
+
+### 3. アダプタを挿して、ポートの名前を確かめる
+
+Wi-SUN USB アダプタを USB に挿します。Linux では、次のコマンドでポートの名前を確かめます。
+
+```bash
+ls -l /dev/serial/by-id/
+```
+
+`/dev/ttyUSB0` のような番号は、再起動や抜き差しで入れ替わります。`/dev/serial/by-id/…` の名前を使ってください。Windows では、デバイス マネージャーの「ポート (COM と LPT)」に `COM3` のような名前で出ます。設定ノードの欄でも、候補から選べます。
+
+### 4. シリアルポートを開けるようにする
+
+`serialport` はこのノードと一緒に入ります。Raspberry Pi（64 bit の Raspberry Pi OS）では組み立て済みのものが入ります（2026-11-08 に Node.js 18 で確かめました）。ビルドできない環境では入らないことがあり、そのときは Web UI に入れ方を出します。
 
 Linux では、Node-RED を動かすユーザーをシリアルポートのグループに入れます。
 
@@ -102,7 +139,11 @@ docker run -d -p 1880:1880 -v node_red_data:/data \
 
 `/dev/ttyUSB*` の番号は、再起動や抜き差しで入れ替わります。入れ替わりを避けるには `/dev/serial/by-id/…` を指定してください。
 
-### 2. ノードを置く
+### 5. B ルートの認証情報を用意する
+
+電力会社から届いた認証 ID（32 桁）とパスワード（12 桁）を用意します（[B ルートの申し込み](#b-ルートの申し込み)）。
+
+### 6. ノードを置いて設定する
 
 例の `02-real-adapter` を読み込むか、パレットの**ネットワーク**（network）カテゴリにある **B ルート**をフローに置きます（パレットの検索では `broute` か `B ルート` で探せます）。ノードをダブルクリックして、「アダプタ」の鉛筆のアイコンから設定ノードを作ります。
 
@@ -115,9 +156,27 @@ docker run -d -p 1880:1880 -v node_red_data:/data \
 | 取得間隔 | 値を取りに行く間隔（既定 30 秒、15〜3600 秒） |
 | 定期的に取りに行く値 | 取得間隔ごとに取りに行く値（既定は瞬時電力 `E7` と瞬時電流 `E8`。1 回の要求に載るので電波の時間はほとんど増えません） |
 
-デプロイすると、自動で接続し、設定した間隔で計測値が出力 1 に流れます。入力を配線しなくても動きます。
+![エディタの Wi-SUN アダプタの設定ノードの編集画面。契約・接続先・認証 ID・パスワード・取得間隔の欄が並ぶ](https://raw.githubusercontent.com/UnlitCube/node-red-broute/main/images/editor-device.png)
 
-### 3. 認証情報の入れ方
+### 7. デプロイして、つながったことを確かめる
+
+「デプロイ」を押すと、ノードがアダプタを初期化し、メーターを探して認証します。入力を配線しなくても動きます。
+
+Web UI（`http://<Node-RED のホスト>:1880/wsuha-broute/ui/`）の状態タブで、接続の段階が「接続済み」まで進めば、設定した間隔で計測値が出力 1 に流れ始めます。実機では 1〜3 分ほどかかります。メーターを探すのに時間がかかると、それより長くなります。進まないときは [うまくいかないとき](#うまくいかないとき) を見てください。
+
+### 8. 守りを整える
+
+Node-RED のエディタにログイン（`adminAuth`）を設定すると、Web UI からの変更にもエディタのログインが要るようになります。設定の仕方は Node-RED の公式の手順（<https://nodered.org/docs/user-guide/runtime/securing-node-red>）のとおりで、パスワードのハッシュは `node-red admin hash-pw` で作ります。Web UI を見られる人も限るときは `httpNodeAuth` を使います。詳しくは [セキュリティと settings.js](#セキュリティと-settingsjs) にあります。Node-RED をインターネットへ直接出さないでください。
+
+### 9. 起動時に自動で動かす
+
+Raspberry Pi の公式の手順で入れたときは、次のコマンドで、電源を入れたときに Node-RED が動くようになります。
+
+```bash
+sudo systemctl enable nodered.service
+```
+
+### 認証情報の入れ方
 
 入れる場所は 3 つあります。どれか 1 つに入れれば動きます。
 
@@ -133,7 +192,7 @@ docker run -d -p 1880:1880 -v node_red_data:/data \
 
 > 古い版から移すときだけ、秘密ファイル `wsuha-broute-<キー>.secret.json` も読みます（userDir、Node-RED の作業ディレクトリ、ホームの順に探します。デバイスキーがある台だけです）。新しく入れるときは使わないでください。
 
-### 4. 動力と電力のように 2 契約あるとき
+### 動力と電力のように 2 契約あるとき
 
 **どの契約につながるかを決めるのは、USB ポートではなく認証情報です。** ポートを差し替えても、同じ認証情報なら同じ契約につながります。
 
@@ -171,6 +230,17 @@ PAN は 1 件見つかりましたが、この認証情報に対応するメー�
 | ログ | アダプタのログ（レベルの絞り込み・検索・一時停止・.txt で保存） |
 
 操作（今すぐ取得・再接続・停止と開始・自動運転に戻す・セッション終了・送信制限の手動解除）は、右の上にあります。
+
+![計測値タブ。直近 1 時間の瞬時電力・R 相と T 相の電流・電波の強さ（LQI）の推移](https://raw.githubusercontent.com/UnlitCube/node-red-broute/main/images/webui-values.png)
+
+![設定タブ。アダプタと接続（契約・名前・接続先）と、B ルートの認証 ID とパスワードのカード](https://raw.githubusercontent.com/UnlitCube/node-red-broute/main/images/webui-settings.png)
+
+スマートフォンでは、一覧と詳細を切り替えて使います。
+
+<p>
+  <img src="https://raw.githubusercontent.com/UnlitCube/node-red-broute/main/images/webui-mobile-list.png" alt="スマートフォンの一覧。全台の瞬時電力の合計と、アダプタごとの状態・瞬時電流・電波の強さ" width="300">
+  <img src="https://raw.githubusercontent.com/UnlitCube/node-red-broute/main/images/webui-mobile-status.png" alt="スマートフォンの詳細。主な値・操作のボタン・接続の段階" width="300">
+</p>
 
 接続に関わる項目を変えると、その台だけ接続し直します。計測の設定は再接続せずに効き、`<userDir>/wsuha-broute/settings.json` に残ります。
 
@@ -395,11 +465,11 @@ wsuhaBroute: {
 
 ### 「serialport を読み込めません」と出る
 
-パレットからこのノードを入れ直すか、userDir で `npm install serialport@12` を実行して、Node-RED を再起動してください。
+このノードを入れ直すか、userDir で `npm install serialport@12` を実行して、Node-RED を再起動してください。
 
 ### ポートを開けない
 
-- Linux では、[シリアルポートを開けるようにする](#1-シリアルポートを開けるようにする)を確かめてください。
+- Linux では、[シリアルポートを開けるようにする](#4-シリアルポートを開けるようにする)を確かめてください。
 - ほかの台やフローのシリアルのノードが同じポートを使っていないかを確かめてください。
 
 ### 「USB が切断されています」と出る・別のアダプタが見える
@@ -430,7 +500,9 @@ wsuhaBroute: {
 
 ## 更新
 
-**パレットから入れ直しても、動いているコードは入れ替わりません。** Node.js の `require` のキャッシュが残るので、入れ直してデプロイしても、古いコードが動き続けます。パッケージを更新したら、Node-RED を再起動してください（Web UI の帯でも知らせます）。
+新しい版は、入れたときと同じコマンド（`npm install github:UnlitCube/node-red-broute`）で入れます。
+
+**入れ直しただけでは、動いているコードは入れ替わりません。** Node.js の `require` のキャッシュが残るので、入れ直してデプロイしても、古いコードが動き続けます。パッケージを更新したら、Node-RED を再起動してください（Web UI の帯でも知らせます）。
 
 設定（ポート・認証情報・取得間隔など）の変更は、デプロイするだけで反映されます。再起動は要りません。
 
@@ -440,7 +512,7 @@ wsuhaBroute: {
 
 ## 開発
 
-試験はリポジトリにあります（npm の配布物には入っていません）。リポジトリを取り出して流します。
+試験は <https://github.com/UnlitCube/node-red-broute> にあります（npm の配布物には入っていません）。リポジトリを取り出して流します。
 
 ```bash
 npm test     # 実機は要りません（シミュレーターを相手にします）
