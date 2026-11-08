@@ -65,7 +65,7 @@ B ルートを使うには、お住まいの地域の一般送配電事業者（
    npm install github:UnlitCube/node-red-broute
    ```
 
-   npm にはまだ公開していないので、パレットの「ノードを追加」には出ません。GitHub から入れてください。
+   npm にはまだ公開していないので、パレットの「ノードを追加」には出ません。GitHub から入れるので、git が要ります（無ければ、Debian・Ubuntu・Raspberry Pi OS では `sudo apt install -y git` で入れます）。
 
 2. メニューから「読み込み」→「サンプル」→ `flows` → `@unlitcube/node-red-broute` → `01-simulator` を選び、読み込みます。タブ「B ルート（シミュレーター）」が増えます。
 3. 「デプロイ」を押します。
@@ -97,6 +97,12 @@ bash <(curl -sL https://github.com/node-red/linux-installers/releases/latest/dow
 ほかの環境は、公式の手順（<https://nodered.org/docs/getting-started/>）で入れてください。Node-RED 3.1 以上・Node.js 18 以上が要ります。
 
 ### 2. このノードを入れる
+
+GitHub から入れるので、git が要ります。Node-RED の公式の手順では入らないので、無ければ先に入れます。
+
+```bash
+sudo apt install -y git
+```
 
 userDir（ふつうは `~/.node-red`）で入れて、Node-RED を再起動します。
 

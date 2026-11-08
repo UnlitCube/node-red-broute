@@ -2,6 +2,9 @@
 
 ## vNext
 
+### 🔧 改善
+- README の入れ方に、GitHub から入れるには git が要ることと、その入れ方を書きました。Node-RED の公式の手順では git が入らず、`npm install` が `spawn git ENOENT` で止まります。
+
 ## v2.0.0-beta.5 (2026-11-08)
 
 ### 🔧 改善
